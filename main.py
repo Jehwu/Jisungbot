@@ -3,9 +3,14 @@ import json
 import discord
 from discord.ext import commands
 
-# -------------------------------------------------------------
+# python-dotenv 라이브러리로 디스호스트의 .env 파일 강제 로드
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # 1. 디스코드 인텐트(Intents) 및 봇 설정
-# -------------------------------------------------------------
 intents = discord.Intents.default()
 intents.message_content = True  # 메시지 내용 읽기 권한
 intents.members = True          # 서버 멤버 감지 권한
@@ -16,9 +21,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DATA_FILE = "bot_data.json"
 
 
-# -------------------------------------------------------------
 # 2. JSON 데이터 불러오기 / 저장하기 함수
-# -------------------------------------------------------------
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {}
@@ -37,9 +40,7 @@ def save_data(data):
         print(f"데이터 파일 저장 오류: {e}")
 
 
-# -------------------------------------------------------------
 # 3. 봇 이벤트 및 명령어
-# -------------------------------------------------------------
 @bot.event
 async def on_ready():
     print("----------------------------------------")
@@ -72,33 +73,14 @@ async def daily_money(ctx):
     await ctx.send(f"✅ {ctx.author.mention}님, 출석체크로 **{reward:,}원**을 받았습니다! (현재 잔액: {data[user_id]['money']:,}원)")
 
 
-# -------------------------------------------------------------
-# 4. 토큰 가져오기 및 예외 처리 (공백/따옴표 자동 제거)
-# -------------------------------------------------------------
-# 환경변수에서 'BOT_TOKEN' 또는 'DISCORD_TOKEN'을 먼저 찾습니다.
-raw_token = os.environ.get("BOT_TOKEN") or os.environ.get("DISCORD_TOKEN") or ""
-
-# 만약 환경변수가 비어있다면, 아래 따옴표 안의 직접 입력한 토큰을 사용합니다.
-if not raw_token or raw_token.strip() == "":
-    raw_token = "여기에_새로_발급받은_디스코드_봇_토큰_붙여넣기"
-
-# 토큰 복사 시 들어갈 수 있는 앞뒤 공백, 줄바꿈, 따옴표를 정제합니다.
-TOKEN = raw_token.strip().strip("'").strip('"')
+# 4. 환경변수 및 .env에서 토큰 가져오기
+RAW_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("DISCORD_TOKEN") or ""
+TOKEN = RAW_TOKEN.strip().strip("'").strip('"')
 
 
-# -------------------------------------------------------------
 # 5. 봇 실행
-# -------------------------------------------------------------
 if __name__ == "__main__":
-    if TOKEN and TOKEN != "여기에_새로_발급받은_디스코드_봇_토큰_붙여넣기":
-        try:
-            bot.run(TOKEN)
-        except discord.errors.LoginFailure:
-            print("\n❌ [로그인 실패] 토큰이 올바르지 않습니다!")
-            print("1. Discord Developer Portal -> Bot -> 'Reset Token'으로 뽑은 진짜 토큰이 맞는지 확인해 주세요.")
-            print("2. Application ID나 Client Secret을 토큰 자리에 넣으셨는지 확인해 주세요.\n")
-        except Exception as e:
-            print(f"\n❌ [시작 실패] 오류 원인: {e}\n")
+    if TOKEN:
+        bot.run(TOKEN)
     else:
-        print("\n❌ [설정 오류] 토큰이 비어있거나 기본 문구가 그대로 남아있습니다!")
-        print("디스호스트 [간편 설정]의 BOT_TOKEN 환경변수를 저장하거나, 코드 맨 밑에 토큰을 넣고 저장해 주세요.\n")
+        print("\n❌ 토큰을 찾을 수 없습니다. 디스호스트 [파일] 탭에 .env 파일을 생성해 주세요.\n")
