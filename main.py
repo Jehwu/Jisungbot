@@ -51,9 +51,9 @@ async def daily(ctx):
     
     await ctx.send(f"✅ {ctx.author.mention}님, 출석체크로 1,000원을 받으셨습니다! (현재: {data[user_id]['money']}원)")
 
-# 2. 토큰 가져오기 (환경변수에서 토큰을 읽어옵니다)
-# 깃허브 보안 시스템에 걸리지 않도록 하드코딩을 방지합니다.
-TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("DISCORD_TOKEN")
+# 디스호스트 환경변수명 및 직접 입력 지원
+TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TOKEN") or "여기에_디스코드_봇_토큰_붙여넣기"
+
 
 if __name__ == "__main__":
     if TOKEN:
