@@ -105,6 +105,7 @@ def get_user_data(data, user_id):
             "hot6_used_today": 0,
             "remittance_count_today": 0,
             "last_check_date": "",
+            "last_bankrupt_date": "",
             "attendance_streak": 0,
             "inventory": {
                 "똥먹방 비법서": 0, "차은우지성 조각상": 0, "170KG 비법서": 0,
@@ -123,6 +124,7 @@ def get_user_data(data, user_id):
         u = data["users"][uid]
         u.setdefault("remittance_count_today", 0)
         u.setdefault("last_check_date", "")
+        u.setdefault("last_bankrupt_date", "")
         u.setdefault("attendance_streak", 0)
         u.setdefault("last_fish_time", 0)
         u.setdefault("owned_rods", [0])
@@ -185,7 +187,6 @@ artifact_times = [time(hour=h, minute=m) for h in range(24) for m in (0, 30)]
 @tasks.loop(time=artifact_times)
 async def update_artifact_and_fish_prices():
     data = load_data()
-    # 유물 시세
     art_base = {
         "똥먹방 비법서": (30000, 6000, 90000),
         "차은우지성 조각상": (50000, 10000, 150000),
@@ -200,7 +201,6 @@ async def update_artifact_and_fish_prices():
         new_price = max(min_p, min(max_p, int(curr_price * (1 + rate))))
         data["market"]["artifacts"][item] = {"price": new_price, "prev_price": curr_price}
 
-    # 물고기 시세 (30분 주기 -35% ~ +35%)
     fish_base = {
         "붕어": (1000, 500, 2000), "고등어": (1000, 500, 2000), "광어": (1000, 500, 2000),
         "참다랑어": (10000, 5000, 20000), "돗돔": (10000, 5000, 20000),
@@ -227,7 +227,7 @@ async def update_stock_prices():
         data["market"]["stocks"][stock] = {"price": new_price, "prev_price": curr_price}
     save_data(data)
 
-@tasks.loop(time=time(hour=15, minute=0)) # KST 00시 초기화
+@tasks.loop(time=time(hour=15, minute=0)) # KST 00시
 async def daily_reset():
     data = load_data()
     for uid, user in data["users"].items():
@@ -247,7 +247,7 @@ class StockTradeModal(discord.ui.Modal):
         self.mode = mode
         self.stock_name = stock_name
         self.user_id = user_id
-        self.qty_input = discord.ui.TextInput(label="거래할 수량을 입력하세요", placeholder="예: 5", min_length=1, max_length=6)
+        self.qty_input = discord.ui.TextInput(label="수량 입력", placeholder="예: 5", min_length=1, max_length=6)
         self.add_item(self.qty_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -255,7 +255,7 @@ class StockTradeModal(discord.ui.Modal):
             qty = int(self.qty_input.value)
             if qty <= 0: raise ValueError
         except ValueError:
-            await interaction.response.send_message("❌ 올바른 숫자를 입력해주세요.", ephemeral=True)
+            await interaction.response.send_message("❌ 올바른 수량을 입력해주세요.", ephemeral=True)
             return
 
         data = load_data()
@@ -266,28 +266,28 @@ class StockTradeModal(discord.ui.Modal):
 
         if self.mode == "buy":
             if u["money"] < total_cost:
-                await interaction.response.send_message(f"❌ 소지금이 부족합니다. (필요: {total_cost:,}원)", ephemeral=True)
+                await interaction.response.send_message(f"❌ 현금이 부족합니다. (필요: {total_cost:,}원)", ephemeral=True)
                 return
             u["money"] -= total_cost
             u["stocks"][self.stock_name] += qty
-            msg = f"📈 [{self.stock_name}] {qty}주를 총 {total_cost:,}원에 매수했습니다!"
+            msg = f"📈 [{self.stock_name}] {qty}주 매수 완료! (-{total_cost:,}원)"
         else:
             if u["stocks"].get(self.stock_name, 0) < qty:
                 await interaction.response.send_message(f"❌ 소지한 [{self.stock_name}] 주식이 부족합니다.", ephemeral=True)
                 return
             u["stocks"][self.stock_name] -= qty
             u["money"] += total_cost
-            msg = f"📉 [{self.stock_name}] {qty}주를 총 {total_cost:,}원에 매도했습니다!"
+            msg = f"📉 [{self.stock_name}] {qty}주 매도 완료! (+{total_cost:,}원)"
 
         save_data(data)
         await interaction.response.send_message(msg, ephemeral=True)
 
 class ArtifactSellModal(discord.ui.Modal):
     def __init__(self, art_name, user_id):
-        super().__init__(title=f"🏛️ {art_name} 지정 매도")
+        super().__init__(title=f"🏛️ {art_name} 매도")
         self.art_name = art_name
         self.user_id = user_id
-        self.qty_input = discord.ui.TextInput(label="판매할 개수를 입력하세요", placeholder="예: 1", min_length=1, max_length=5)
+        self.qty_input = discord.ui.TextInput(label="판매 수량 입력", placeholder="예: 1", min_length=1, max_length=5)
         self.add_item(self.qty_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -295,7 +295,7 @@ class ArtifactSellModal(discord.ui.Modal):
             qty = int(self.qty_input.value)
             if qty <= 0: raise ValueError
         except ValueError:
-            await interaction.response.send_message("❌ 올바른 숫자를 입력해주세요.", ephemeral=True)
+            await interaction.response.send_message("❌ 올바른 수량을 입력해주세요.", ephemeral=True)
             return
 
         data = load_data()
@@ -312,10 +312,10 @@ class ArtifactSellModal(discord.ui.Modal):
         u["money"] += total
         save_data(data)
 
-        await interaction.response.send_message(f"✅ [{self.art_name}] {qty}개를 총 {total:,}원에 매각했습니다!", ephemeral=True)
+        await interaction.response.send_message(f"✅ [{self.art_name}] {qty}개 매각 완료! (+{total:,}원)", ephemeral=True)
 
 # ---------------------------------------------------------
-# 6. UI 대시보드 컴포넌트 (/주식 /유물 /가방 /강화 /대결)
+# 6. UI 대시보드 컴포넌트 (/주식 /유물 /가방 /강화 /대결 /가위바위보)
 # ---------------------------------------------------------
 
 # 1) 통합 /주식 UI
@@ -324,19 +324,18 @@ class StockView(discord.ui.View):
         super().__init__(timeout=120)
         self.user_id = user_id
 
-    @discord.ui.button(label="📈 주식 매수", style=discord.ButtonStyle.green, row=0)
+    @discord.ui.button(label="📈 매수", style=discord.ButtonStyle.green, row=0)
     async def buy_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 거래 화면만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
-        # 선택용 드롭다운 혹은 모달 트리거
         select_view = StockSelectTradeView(self.user_id, "buy")
         await interaction.response.send_message("📈 매수할 종목을 선택하세요:", view=select_view, ephemeral=True)
 
-    @discord.ui.button(label="📉 주식 매도", style=discord.ButtonStyle.red, row=0)
+    @discord.ui.button(label="📉 매도", style=discord.ButtonStyle.red, row=0)
     async def sell_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 거래 화면만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
         select_view = StockSelectTradeView(self.user_id, "sell")
         await interaction.response.send_message("📉 매도할 종목을 선택하세요:", view=select_view, ephemeral=True)
@@ -351,7 +350,7 @@ class StockSelectTradeView(discord.ui.View):
             discord.SelectOption(label="L을가져닉스", value="L을가져닉스"),
             discord.SelectOption(label="엔비티키퐁크", value="엔비티키퐁크")
         ]
-        select = discord.ui.Select(placeholder="종목을 선택하세요...", options=options)
+        select = discord.ui.Select(placeholder="종목 선택...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
 
@@ -367,9 +366,7 @@ def build_stock_embed(user):
     now = datetime.now(KST)
     rem_min = 60 - now.minute if now.minute > 0 else 60
 
-    embed = discord.Embed(title="📈 주식 거래 대시보드 (1시간 정각 변동)", color=0x3498db)
-    embed.set_thumbnail(url=get_img_url("주식시세.png"))
-
+    embed = discord.Embed(title="📈 주식 대시보드", color=0x3498db)
     lines = []
     total_stock_val = 0
     for st, info in stocks.items():
@@ -382,11 +379,11 @@ def build_stock_embed(user):
         val = price * user_qty
         total_stock_val += val
 
-        lines.append(f"• **{st}** | `{price:,}원` ({status})\n  └ 내 소지: **{user_qty:,}주** (평가액: {val:,}원)")
+        lines.append(f"• **{st}** | `{price:,}원` ({status}) | 보유: `{user_qty:,}주` ({val:,}원)")
 
     embed.description = "\n".join(lines)
-    embed.add_field(name="💼 총 주식 평가금액", value=f"**{total_stock_val:,}원**", inline=False)
-    embed.set_footer(text=f"⏱️ 다음 시세 변동까지: 약 {rem_min}분 남음")
+    embed.add_field(name="💼 총 평가금액", value=f"**{total_stock_val:,}원**", inline=False)
+    embed.set_footer(text=f"⏱️ 갱신까지 약 {rem_min}분 남음")
     return embed
 
 # 2) 통합 /유물 UI
@@ -395,13 +392,13 @@ class ArtifactView(discord.ui.View):
         super().__init__(timeout=120)
         self.user_id = user_id
 
-    @discord.ui.button(label="💰 유물 지정 매도", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="💰 유물 매도", style=discord.ButtonStyle.primary)
     async def sell_art_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 화면만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
         select_view = ArtifactSelectTradeView(self.user_id)
-        await interaction.response.send_message("🏛️ 팔고 싶은 유물을 선택하세요:", view=select_view, ephemeral=True)
+        await interaction.response.send_message("🏛️ 매도할 유물을 선택하세요:", view=select_view, ephemeral=True)
 
 class ArtifactSelectTradeView(discord.ui.View):
     def __init__(self, user_id):
@@ -414,7 +411,7 @@ class ArtifactSelectTradeView(discord.ui.View):
             discord.SelectOption(label="곤지암병원 지도", value="곤지암병원 지도"),
             discord.SelectOption(label="L을 가져가 비법서", value="L을 가져가 비법서")
         ]
-        select = discord.ui.Select(placeholder="유물을 선택하세요...", options=options)
+        select = discord.ui.Select(placeholder="유물 선택...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
 
@@ -430,9 +427,7 @@ def build_artifact_embed(user):
     now = datetime.now(KST)
     rem_min = 30 - (now.minute % 30)
 
-    embed = discord.Embed(title="🏛️ 고대 유물 거래 대시보드 (30분 정각 변동)", color=0xf1c40f)
-    embed.set_thumbnail(url=get_img_url("유물시세.png"))
-
+    embed = discord.Embed(title="🏛️ 고대 유물 대시보드", color=0xf1c40f)
     lines = []
     total_art_val = 0
     for name, info in market.items():
@@ -445,14 +440,14 @@ def build_artifact_embed(user):
         val = price * user_qty
         total_art_val += val
 
-        lines.append(f"• **{name}** | `{price:,}원` ({status})\n  └ 내 소지: **{user_qty}개** (평가액: {val:,}원)")
+        lines.append(f"• **{name}** | `{price:,}원` ({status}) | 보유: `{user_qty}개` ({val:,}원)")
 
     embed.description = "\n".join(lines)
-    embed.add_field(name="🏛️ 총 유물 평가금액", value=f"**{total_art_val:,}원**", inline=False)
-    embed.set_footer(text=f"⏱️ 다음 시세 변동까지: 약 {rem_min}분 남음")
+    embed.add_field(name="🏛️ 총 평가금액", value=f"**{total_art_val:,}원**", inline=False)
+    embed.set_footer(text=f"⏱️ 갱신까지 약 {rem_min}분 남음")
     return embed
 
-# 3) /가방 UI (물고기 전체 일괄 매도 기능 탑재)
+# 3) /가방 UI (물고기 일괄 매도)
 class BagItemSelect(discord.ui.Select):
     def __init__(self, user_id):
         self.user_id = user_id
@@ -461,11 +456,11 @@ class BagItemSelect(discord.ui.Select):
             discord.SelectOption(label="핫식스 박스", description="피로도 100 완충 (일일 1회)", emoji="⚡", value="핫식스 박스"),
             discord.SelectOption(label="유물 랜덤 상자", description="고대 유물 100% 획득", emoji="📦", value="유물 랜덤 상자")
         ]
-        super().__init__(placeholder="🥤 소모성 아이템을 선택하여 사용...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="🥤 소모품 선택...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 가방 메뉴만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
 
         item = self.values[0]
@@ -479,28 +474,28 @@ class BagItemSelect(discord.ui.Select):
         msg = ""
         if item == "에너지드링크":
             if u["drink_used_today"] >= 3:
-                await interaction.response.send_message("❌ 에너지드링크는 하루 최대 3회만 사용할 수 있습니다.", ephemeral=True)
+                await interaction.response.send_message("❌ 하루 최대 3회만 사용 가능합니다.", ephemeral=True)
                 return
             u["inventory"][item] -= 1
             u["drink_used_today"] += 1
             u["fatigue"] = min(100, u["fatigue"] + 30)
-            msg = f"🥤 에너지드링크를 마셨습니다! (피로도: {u['fatigue']}/100)"
+            msg = f"🥤 에너지드링크 사용! (피로도: {u['fatigue']}/100)"
 
         elif item == "핫식스 박스":
             if u["hot6_used_today"] >= 1:
-                await interaction.response.send_message("❌ 핫식스 박스는 하루 최대 1회만 사용할 수 있습니다.", ephemeral=True)
+                await interaction.response.send_message("❌ 하루 최대 1회만 사용 가능합니다.", ephemeral=True)
                 return
             u["inventory"][item] -= 1
             u["hot6_used_today"] += 1
             u["fatigue"] = 100
-            msg = f"⚡ 핫식스를 마셨습니다! 피로도가 100으로 완충되었습니다!"
+            msg = f"⚡ 핫식스 사용! 피로도가 100으로 완충되었습니다!"
 
         elif item == "유물 랜덤 상자":
             u["inventory"][item] -= 1
             arts = ["똥먹방 비법서", "차은우지성 조각상", "170KG 비법서", "곤지암병원 지도", "L을 가져가 비법서"]
             got = random.choice(arts)
             u["inventory"][got] += 1
-            msg = f"📦 유물 랜덤 상자에서 【 {got} 】을(를) 발굴했습니다!"
+            msg = f"📦 유물 상자에서 【 {got} 】을(를) 발굴했습니다!"
 
         save_data(data)
         embed = build_bag_embed(interaction.user, u)
@@ -519,11 +514,11 @@ class BagRodSelect(discord.ui.Select):
                 emoji="🎣",
                 value=str(rod_id)
             ))
-        super().__init__(placeholder="🎣 장착할 낚싯대를 선택...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="🎣 낚싯대 선택...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 가방 메뉴만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
 
         rod_id = int(self.values[0])
@@ -534,7 +529,7 @@ class BagRodSelect(discord.ui.Select):
 
         embed = build_bag_embed(interaction.user, u)
         await interaction.response.edit_message(embed=embed, view=self.view)
-        await interaction.followup.send(f"🎣 낚싯대를 **[{ROD_DATA[rod_id]['name']}]**(으)로 변경 장착했습니다!", ephemeral=True)
+        await interaction.followup.send(f"🎣 낚싯대를 **[{ROD_DATA[rod_id]['name']}]**(으)로 장착했습니다!", ephemeral=True)
 
 class BagView(discord.ui.View):
     def __init__(self, user_id, owned_rods):
@@ -543,10 +538,10 @@ class BagView(discord.ui.View):
         self.add_item(BagItemSelect(user_id))
         self.add_item(BagRodSelect(user_id, owned_rods))
 
-    @discord.ui.button(label="🐟 보유 물고기 전체 매도", style=discord.ButtonStyle.success, row=2)
+    @discord.ui.button(label="🐟 물고기 전체 매도", style=discord.ButtonStyle.success, row=2)
     async def sell_all_fish_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 가방만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
 
         data = load_data()
@@ -568,7 +563,7 @@ class BagView(discord.ui.View):
                 sold_summary.append(f"{f} {count}개 ({sum_val:,}원)")
 
         if total_earned == 0:
-            await interaction.response.send_message("❌ 매각할 물고기가 가방에 없습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 매각할 물고기가 없습니다.", ephemeral=True)
             return
 
         u["money"] += total_earned
@@ -576,23 +571,22 @@ class BagView(discord.ui.View):
 
         embed = build_bag_embed(interaction.user, u)
         await interaction.response.edit_message(embed=embed, view=self)
-        await interaction.followup.send(f"💰 **[물고기 일괄 매도 완료]**\n• 판매 내역: {', '.join(sold_summary)}\n• 정산 금액: **+{total_earned:,}원** 획득!", ephemeral=True)
+        await interaction.followup.send(f"💰 **[물고기 일괄 매도 완료]**\n• 내역: {', '.join(sold_summary)}\n• 총 정산: **+{total_earned:,}원**", ephemeral=True)
 
 def build_bag_embed(user, u):
     data = load_data()
     fish_market = data["market"]["fish"]
 
-    embed = discord.Embed(title=f"🎒 {user.display_name}님의 가방 & 장비", color=0x9b59b6)
+    embed = discord.Embed(title=f"🎒 {user.display_name}님의 가방", color=0x9b59b6)
     embed.set_thumbnail(url=user.display_avatar.url)
 
     eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
-    embed.add_field(name="🎣 장착 낚싯대", value=f"**[{eq_rod_name}]** (회당 피로도 {ROD_DATA[u.get('equipped_rod', 0)]['fatigue']} 소모)", inline=False)
+    embed.add_field(name="🎣 현재 낚싯대", value=f"**[{eq_rod_name}]** (피로도 {ROD_DATA[u.get('equipped_rod', 0)]['fatigue']} 소모)", inline=False)
 
     artifacts = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in DEFAULT_MARKET["artifacts"] and v > 0]
     consumables = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["에너지드링크", "핫식스 박스", "유물 랜덤 상자"] and v > 0]
     materials = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["강화석", "파괴 방지권", "하락 방지권"] and v > 0]
 
-    # 물고기 목록 및 실시간 시세 반영
     fish_items = ["붕어", "고등어", "광어", "참다랑어", "돗돔", "황금 잉어"]
     fish_str = []
     total_fish_val = 0
@@ -603,55 +597,45 @@ def build_bag_embed(user, u):
             price = p_info["price"] if isinstance(p_info, dict) else p_info
             val = price * cnt
             total_fish_val += val
-            fish_str.append(f"• {f}: **{cnt}개** *(현재가: 개당 {price:,}원 / 총 {val:,}원)*")
+            fish_str.append(f"• {f}: **{cnt}개** (개당 {price:,}원 / 총 {val:,}원)")
 
     junk_items = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["찢어진 장화", "썩은 미역", "빈 깡통"] and v > 0]
 
-    embed.add_field(name="🏛️ 보유 유물", value="\n".join(artifacts) if artifacts else "없음", inline=False)
-    embed.add_field(name=f"🐟 보유 해산물 (총 예상 매각가: {total_fish_val:,}원)", value="\n".join(fish_str) if fish_str else "없음", inline=False)
-    if junk_items: embed.add_field(name="🗑️ 낚시 잡동사니", value="\n".join(junk_items), inline=False)
+    embed.add_field(name="🏛️ 유물", value="\n".join(artifacts) if artifacts else "없음", inline=False)
+    embed.add_field(name=f"🐟 해산물 (총 {total_fish_val:,}원 상당)", value="\n".join(fish_str) if fish_str else "없음", inline=False)
+    if junk_items: embed.add_field(name="🗑️ 잡동사니", value="\n".join(junk_items), inline=False)
     embed.add_field(name="🥤 소모품", value="\n".join(consumables) if consumables else "없음", inline=False)
     embed.add_field(name="🛡️ 강화 재료", value="\n".join(materials) if materials else "없음", inline=False)
     return embed
 
-# 4) /강화 UI
+# 4) /강화 UI (가독성 개편)
 def build_upgrade_embed(user, u, last_result_msg=None):
     curr_lvl = u["car_level"]
 
     if curr_lvl >= 31:
-        embed = discord.Embed(
-            title="🚘 자동차 강화 정비소",
-            description="✨ 이미 최고 등급인 **[30(+1)강 부가티 라 부아튀르 누아르]**를 소유하고 있습니다!",
-            color=0xf1c40f
-        )
-        embed.set_thumbnail(url=user.display_avatar.url)
+        embed = discord.Embed(title="🚘 정비소", description="✨ 최고 등급 **[부가티 라 부아튀르 누아르]** 달성!", color=0xf1c40f)
         return embed
 
     gold_cost, stone_cost, success_rate, destroy_rate, degrade_rate = get_upgrade_info(curr_lvl)
 
     embed = discord.Embed(
         title="🚘 자동차 강화 정비소",
-        description=f"🚗 현재 보유 차량: **{get_car_name(curr_lvl)}**\n🎯 다음 목표 차량: **{get_car_name(curr_lvl + 1)}**",
+        description=f"🚗 현재: **{get_car_name(curr_lvl)}** ➔ 목표: **{get_car_name(curr_lvl + 1)}**",
         color=0x3498db
     )
-    embed.set_thumbnail(url=user.display_avatar.url)
 
     if last_result_msg:
-        embed.add_field(name="📢 최근 강화 결과", value=last_result_msg, inline=False)
+        embed.add_field(name="📢 최근 결과", value=last_result_msg, inline=False)
 
-    prob_str = f"• 성공 확률: **{success_rate}%**\n"
-    if degrade_rate > 0: prob_str += f"• 등급 하락 확률: **{degrade_rate}%**\n"
-    if destroy_rate > 0: prob_str += f"• 차량 폐차(파괴) 확률: **{destroy_rate}%**\n"
-    embed.add_field(name="📊 성공 및 위험 확률", value=prob_str, inline=False)
+    prob_str = f"• 성공: **{success_rate}%**"
+    if degrade_rate > 0: prob_str += f" | 하락: **{degrade_rate}%**"
+    if destroy_rate > 0: prob_str += f" | 파괴: **{destroy_rate}%**"
+    embed.add_field(name="📊 확률 스펙", value=prob_str, inline=False)
 
-    mat_str = f"• 필요 골드: **{gold_cost:,}원** (보유: {u['money']:,}원)\n"
-    if stone_cost > 0:
-        mat_str += f"• 필요 강화석: **{stone_cost}개** (보유: {u['inventory']['강화석']}개)\n"
-    else:
-        mat_str += "• 필요 강화석: **없음 (10강부터 필요)**\n"
-    embed.add_field(name="🛠️ 강화 필요 재료", value=mat_str, inline=False)
+    mat_str = f"• 비용: **{gold_cost:,}원** (보유: {u['money']:,}원)\n• 필요 강화석: **{stone_cost}개** (보유: {u['inventory']['강화석']}개)"
+    embed.add_field(name="🛠️ 강화 재료", value=mat_str, inline=False)
 
-    prot_str = f"• 파괴 방지권: **{u['inventory']['파괴 방지권']}개** 보유\n• 하락 방지권: **{u['inventory']['하락 방지권']}개** 보유"
+    prot_str = f"• 파괴 방지권: **{u['inventory']['파괴 방지권']}개** | 하락 방지권: **{u['inventory']['하락 방지권']}개**"
     embed.add_field(name="🛡️ 안전 방지권 현황", value=prot_str, inline=False)
 
     return embed
@@ -664,7 +648,7 @@ class UpgradeView(discord.ui.View):
     @discord.ui.button(label="⚔️ 강화하기", style=discord.ButtonStyle.green)
     async def do_upgrade(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 강화 정비소만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
 
         data = load_data()
@@ -672,17 +656,17 @@ class UpgradeView(discord.ui.View):
         curr_lvl = u["car_level"]
 
         if curr_lvl >= 31:
-            await interaction.response.send_message("✨ 이미 최상위 차량을 소유 중입니다!", ephemeral=True)
+            await interaction.response.send_message("✨ 최상위 차량을 소유 중입니다!", ephemeral=True)
             return
 
         gold_cost, stone_cost, success_rate, destroy_rate, degrade_rate = get_upgrade_info(curr_lvl)
 
         if u["money"] < gold_cost:
-            await interaction.response.send_message(f"❌ 강화 골드가 부족합니다! (필요: {gold_cost:,}원)", ephemeral=True)
+            await interaction.response.send_message(f"❌ 골드가 부족합니다! ({gold_cost:,}원 필요)", ephemeral=True)
             return
 
         if stone_cost > 0 and u["inventory"]["강화석"] < stone_cost:
-            await interaction.response.send_message(f"❌ 강화석이 부족합니다! (필요: {stone_cost}개 / 보유: {u['inventory']['강화석']}개)", ephemeral=True)
+            await interaction.response.send_message(f"❌ 강화석이 부족합니다! ({stone_cost}개 필요)", ephemeral=True)
             return
 
         u["money"] -= gold_cost
@@ -692,22 +676,22 @@ class UpgradeView(discord.ui.View):
         rand = random.random() * 100
         if rand < success_rate:
             u["car_level"] += 1
-            result_msg = f"🎉 **강화 성공!!** [{get_car_name(u['car_level'])}](으)로 업그레이드되었습니다!"
+            result_msg = f"🎉 **강화 성공!!** [{get_car_name(u['car_level'])}]"
         else:
             if destroy_rate > 0 and (random.random() * 100 < destroy_rate):
                 if u["inventory"]["파괴 방지권"] > 0:
                     u["inventory"]["파괴 방지권"] -= 1
-                    result_msg = "💥 **강화 실패!** 파괴 방지권이 차량 폐차를 막아냈습니다."
+                    result_msg = "💥 **강화 실패!** (파괴 방지권으로 폐차 방지)"
                 else:
                     u["car_level"] = 0
-                    result_msg = "💥 **강화 실패...** 차량이 대파되어 뚜벅이(맨발)로 돌아갔습니다..."
+                    result_msg = "💥 **강화 실패...** (차량 대파로 뚜벅이 리셋)"
             else:
                 if u["inventory"]["하락 방지권"] > 0:
                     u["inventory"]["하락 방지권"] -= 1
-                    result_msg = "📉 **강화 실패!** 하락 방지권이 차량 등급 하락을 방지했습니다."
+                    result_msg = "📉 **강화 실패!** (하락 방지권으로 강등 방지)"
                 else:
                     u["car_level"] = max(0, u["car_level"] - 1)
-                    result_msg = f"📉 **강화 실패...** 차량 등급이 [{get_car_name(u['car_level'])}](으)로 강등되었습니다."
+                    result_msg = f"📉 **강화 실패...** [{get_car_name(u['car_level'])}](으)로 강등"
 
         save_data(data)
 
@@ -717,14 +701,13 @@ class UpgradeView(discord.ui.View):
         embed = build_upgrade_embed(interaction.user, u, last_result_msg=result_msg)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="❌ 그만두기", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="❌ 종료", style=discord.ButtonStyle.red)
     async def stop_upgrade(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 강화 정비소만 조작 가능합니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인만 조작할 수 있습니다.", ephemeral=True)
             return
-
         for item in self.children: item.disabled = True
-        await interaction.response.edit_message(content="🛑 차량 강화를 종료했습니다.", view=self)
+        await interaction.response.edit_message(content="🛑 강화를 종료했습니다.", view=self)
 
 # 5) /주사위대결 UI
 class DiceDuelView(discord.ui.View):
@@ -741,81 +724,137 @@ class DiceDuelView(discord.ui.View):
             u = get_user_data(data, self.host_user.id)
             u["money"] += self.bet_amount
             save_data(data)
-
             for item in self.children: item.disabled = True
             if self.message:
-                embed = discord.Embed(
-                    title="⏱️ 주사위 대결 시간 초과",
-                    description="3분 동안 참가자가 나타나지 않아 대결이 자동 취소되었으며, 베팅금이 환불되었습니다.",
-                    color=0x7f8c8d
-                )
                 try:
-                    await self.message.edit(embed=embed, view=self)
-                except Exception:
-                    pass
+                    await self.message.edit(embed=discord.Embed(title="⏱️ 주사위 대결 취소", description="시간 초과로 판돈이 환불되었습니다.", color=0x7f8c8d), view=self)
+                except Exception: pass
 
-    @discord.ui.button(label="⚔️ 도전하기", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="⚔️ 난입하기", style=discord.ButtonStyle.green)
     async def challenge(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id == self.host_user.id:
-            await interaction.response.send_message("❌ 자신이 연 대결에는 참여할 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인 대결에는 참여할 수 없습니다.", ephemeral=True)
             return
 
         data = load_data()
         challenger = get_user_data(data, interaction.user.id)
 
-        if challenger["money"] < self.bet_amount:
-            await interaction.response.send_message("❌ 베팅 금액에 필요한 현금이 부족합니다.", ephemeral=True)
-            return
-
         challenger["money"] -= self.bet_amount
-
-        host_roll = random.randint(1, 100)
-        challenger_roll = random.randint(1, 100)
-
+        host_roll, challenger_roll = random.randint(1, 100), random.randint(1, 100)
         host_data = get_user_data(data, self.host_user.id)
         total_pot = self.bet_amount * 2
 
         if host_roll > challenger_roll:
             host_data["money"] += total_pot
-            result_str = f"🎉 **{self.host_user.mention}님 승리!!** (+{total_pot:,}원 독식)"
-            color = 0x2ecc71
+            result_str = f"🎉 **{self.host_user.mention} 승리!** (+{total_pot:,}원)"
         elif challenger_roll > host_roll:
             challenger["money"] += total_pot
-            result_str = f"🎉 **{interaction.user.mention}님 승리!!** (+{total_pot:,}원 독식)"
-            color = 0x2ecc71
+            result_str = f"🎉 **{interaction.user.mention} 승리!** (+{total_pot:,}원)"
         else:
             host_data["money"] += self.bet_amount
             challenger["money"] += self.bet_amount
-            result_str = "🤝 **무승부!** 베팅금이 환불되었습니다."
-            color = 0x95a5a6
+            result_str = "🤝 **무승부!** (베팅금 환불)"
 
         self.completed = True
         save_data(data)
 
         for item in self.children: item.disabled = True
-        embed = discord.Embed(title="🎲 1v1 주사위 대결 결과", color=color)
-        embed.add_field(name=f"👑 {self.host_user.display_name}", value=f"🎲 주사위: **{host_roll}**", inline=True)
-        embed.add_field(name=f"⚔️ {interaction.user.display_name}", value=f"🎲 주사위: **{challenger_roll}**", inline=True)
-        embed.add_field(name="🏆 승부 결과", value=result_str, inline=False)
+        embed = discord.Embed(title="🎲 1v1 주사위 결과", color=0x2ecc71)
+        embed.add_field(name=f"👑 {self.host_user.display_name}", value=f"🎲 **{host_roll}**", inline=True)
+        embed.add_field(name=f"⚔️ {interaction.user.display_name}", value=f"🎲 **{challenger_roll}**", inline=True)
+        embed.add_field(name="🏆 결과", value=result_str, inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="❌ 대결 취소", style=discord.ButtonStyle.red)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.host_user.id:
-            await interaction.response.send_message("❌ 방장만 대결을 취소할 수 있습니다.", ephemeral=True)
+# 6) /가위바위보 UI (비공개 1v1 내기)
+class RPSPlayView(discord.ui.View):
+    def __init__(self, host_user, challenger_user, bet_amount):
+        super().__init__(timeout=120)
+        self.host_user = host_user
+        self.challenger_user = challenger_user
+        self.bet_amount = bet_amount
+        self.choices = {}
+
+    @discord.ui.button(label="✌️ 가위", style=discord.ButtonStyle.primary)
+    async def sci(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_choice(interaction, "가위")
+
+    @discord.ui.button(label="✊ 바위", style=discord.ButtonStyle.primary)
+    async def rock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_choice(interaction, "바위")
+
+    @discord.ui.button(label="🖐️ 보", style=discord.ButtonStyle.primary)
+    async def paper(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_choice(interaction, "보")
+
+    async def process_choice(self, interaction: discord.Interaction, choice: str):
+        if interaction.user.id not in [self.host_user.id, self.challenger_user.id]:
+            await interaction.response.send_message("❌ 진행 중인 당사자만 선택할 수 있습니다.", ephemeral=True)
+            return
+
+        self.choices[interaction.user.id] = choice
+        await interaction.response.send_message(f"✅ **[{choice}]**(을)를 비공개로 제출했습니다!", ephemeral=True)
+
+        if len(self.choices) == 2:
+            for item in self.children: item.disabled = True
+
+            h_choice = self.choices[self.host_user.id]
+            c_choice = self.choices[self.challenger_user.id]
+            total_pot = self.bet_amount * 2
+
+            data = load_data()
+            h_data = get_user_data(data, self.host_user.id)
+            c_data = get_user_data(data, self.challenger_user.id)
+
+            rules = {"가위": "보", "바위": "가위", "보": "바위"}
+
+            if h_choice == c_choice:
+                h_data["money"] += self.bet_amount
+                c_data["money"] += self.bet_amount
+                res_str = "🤝 **무승부!** (베팅금 100% 환불)"
+                color = 0x95a5a6
+            elif rules[h_choice] == c_choice:
+                h_data["money"] += total_pot
+                res_str = f"🎉 **{self.host_user.mention} 승리!** (+{total_pot:,}원 독식)"
+                color = 0x2ecc71
+            else:
+                c_data["money"] += total_pot
+                res_str = f"🎉 **{self.challenger_user.mention} 승리!** (+{total_pot:,}원 독식)"
+                color = 0x2ecc71
+
+            save_data(data)
+
+            embed = discord.Embed(title="⚔️ 가위바위보 대결 결과", color=color)
+            embed.add_field(name=f"👑 {self.host_user.display_name}", value=f"내민 것: **{h_choice}**", inline=True)
+            embed.add_field(name=f"⚔️ {self.challenger_user.display_name}", value=f"내민 것: **{c_choice}**", inline=True)
+            embed.add_field(name="🏆 승부 결과", value=res_str, inline=False)
+            await interaction.message.edit(content=None, embed=embed, view=self)
+
+class RPSLobbyView(discord.ui.View):
+    def __init__(self, host_user, bet_amount):
+        super().__init__(timeout=180)
+        self.host_user = host_user
+        self.bet_amount = bet_amount
+
+    @discord.ui.button(label="⚔️ 참가하기", style=discord.ButtonStyle.green)
+    async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id == self.host_user.id:
+            await interaction.response.send_message("❌ 자신이 연 방에는 참가할 수 없습니다.", ephemeral=True)
             return
 
         data = load_data()
-        u = get_user_data(data, self.host_user.id)
-        u["money"] += self.bet_amount
-        self.completed = True
+        c_data = get_user_data(data, interaction.user.id)
+        c_data["money"] -= self.bet_amount
         save_data(data)
 
-        for item in self.children: item.disabled = True
-        embed = discord.Embed(title="🎲 주사위 대결 취소됨", description="방장에 의해 대결이 취소되고 베팅금이 환불되었습니다.", color=0x7f8c8d)
-        await interaction.response.edit_message(embed=embed, view=self)
+        play_view = RPSPlayView(self.host_user, interaction.user, self.bet_amount)
+        embed = discord.Embed(
+            title="⚔️ 1v1 가위바위보 승부 진행 중!",
+            description=f"**{self.host_user.display_name}** VS **{interaction.user.display_name}**\n판돈: **{self.bet_amount * 2:,}원**\n\n두 분은 아래 버튼 중 하나를 비공개로 누르세요!",
+            color=0xe67e22
+        )
+        await interaction.response.edit_message(embed=embed, view=play_view)
 
-# 6) /경마개장 UI
+# 7) /경마개장 UI (줄바꿈 깨짐 완전 방지 UI)
 class HorseRaceView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=300)
@@ -823,32 +862,28 @@ class HorseRaceView(discord.ui.View):
         self.bet_amount = bet_amount
         self.horses = {1: "지성호", 2: "떡상호", 3: "깡통호", 4: "폭주호"}
         self.participants = {}
-        self.started = False
 
     def build_embed(self):
-        embed = discord.Embed(title="🏇 실시간 서버 경마 대회 대기실", description=f"판돈: **{self.bet_amount:,}원** (방장 포함 2인 이상 출발 가능)", color=0xe67e22)
+        embed = discord.Embed(title="🏇 실시간 경마장 대기실", description=f"판돈: **{self.bet_amount:,}원** (최소 2명 출전 가능)", color=0xe67e22)
         for num, name in self.horses.items():
             user = self.participants.get(num)
-            user_str = user.mention if user else "[ 비어있음 - 버튼을 눌러 탑승 ]"
-            embed.add_field(name=f"{num}번마 {name}", value=user_str, inline=False)
+            user_str = user.mention if user else "[ 빈자리 ]"
+            embed.add_field(name=f"{num}번마 {name}", value=user_str, inline=True)
         return embed
 
     async def add_participant(self, interaction: discord.Interaction, horse_num: int):
         if interaction.user.id in [u.id for u in self.participants.values()]:
-            await interaction.response.send_message("❌ 이미 마권을 하나 구매하셨습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 마권은 1장만 구매 가능합니다.", ephemeral=True)
             return
 
         if horse_num in self.participants:
-            await interaction.response.send_message("❌ 이미 다른 참가자가 선택한 말입니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 이미 선택된 말입니다.", ephemeral=True)
             return
 
         data = load_data()
         u = get_user_data(data, interaction.user.id)
 
         if interaction.user.id != self.host_user.id:
-            if u["money"] < self.bet_amount:
-                await interaction.response.send_message("❌ 판돈 참가 현금이 부족합니다.", ephemeral=True)
-                return
             u["money"] -= self.bet_amount
             save_data(data)
 
@@ -870,14 +905,13 @@ class HorseRaceView(discord.ui.View):
     @discord.ui.button(label="🏁 경주 시작", style=discord.ButtonStyle.green, row=1)
     async def start_race(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.host_user.id:
-            await interaction.response.send_message("❌ 방장만 경주를 시작할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 방장만 시작할 수 있습니다.", ephemeral=True)
             return
 
         if len(self.participants) < 2:
-            await interaction.response.send_message("❌ 최소 2명 이상 참여해야 경마를 시작할 수 있습니다!", ephemeral=True)
+            await interaction.response.send_message("❌ 최소 2명 이상 참여해야 합니다!", ephemeral=True)
             return
 
-        self.started = True
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(view=self)
 
@@ -885,20 +919,23 @@ class HorseRaceView(discord.ui.View):
         total_pot = len(self.participants) * self.bet_amount
         winner_num = None
 
+        # 트랙 위 유저 닉네임 제거로 줄바꿈 완벽 방지
+        legend_str = " | ".join([f"**{num}번**: {user.display_name}" for num, user in self.participants.items()])
+
         while not winner_num:
-            await asyncio.sleep(1.5)
-            race_str = ""
-            for num, user in self.participants.items():
-                distances[num] += random.randint(10, 25)
+            await asyncio.sleep(1.2)
+            race_str = f"🏇 **참가 선수:** {legend_str}\n\n"
+            for num in self.participants.keys():
+                distances[num] += random.randint(12, 28)
                 dist = min(100, distances[num])
                 filled = dist // 10
-                bar = "🟩" * filled + "⬜" * (10 - filled)
-                race_str += f"🏇 {num}번마 {self.horses[num]} ({user.display_name}): {bar} ({dist}m)\n"
+                bar = "─" * filled + "🏇" + "─" * (10 - filled)
+                race_str += f"`{num}번` 🏁{bar} `[{dist}m]`\n"
 
                 if dist >= 100 and not winner_num:
                     winner_num = num
 
-            embed = discord.Embed(title="🏇 경마 레이스 진행 중!!", description=race_str, color=0xe67e22)
+            embed = discord.Embed(title="🏇 실시간 레이스 진행 중!!", description=race_str, color=0xe67e22)
             await interaction.message.edit(embed=embed)
 
         winner_user = self.participants[winner_num]
@@ -907,28 +944,12 @@ class HorseRaceView(discord.ui.View):
         w_data["money"] += total_pot
         save_data(data)
 
-        win_embed = discord.Embed(title="🏆 경마 대회 종료!", color=0xf1c40f)
-        win_embed.add_field(name="🥇 우승 말", value=f"**{winner_num}번마 {self.horses[winner_num]}** ({winner_user.mention})", inline=False)
-        win_embed.add_field(name="💰 획득 상금", value=f"총 판돈 **+{total_pot:,}원** 독식!", inline=False)
+        win_embed = discord.Embed(title="🏆 경마 종료!", color=0xf1c40f)
+        win_embed.add_field(name="🥇 우승", value=f"**{winner_num}번마 {self.horses[winner_num]}** ({winner_user.mention})", inline=False)
+        win_embed.add_field(name="💰 상금", value=f"총 **+{total_pot:,}원** 독식!", inline=False)
         await interaction.message.edit(embed=win_embed)
 
-    @discord.ui.button(label="❌ 개장 취소", style=discord.ButtonStyle.red, row=1)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.host_user.id:
-            await interaction.response.send_message("❌ 방장만 개장을 취소할 수 있습니다.", ephemeral=True)
-            return
-
-        data = load_data()
-        for user in self.participants.values():
-            u = get_user_data(data, user.id)
-            u["money"] += self.bet_amount
-        save_data(data)
-
-        for item in self.children: item.disabled = True
-        embed = discord.Embed(title="🏇 경마 대회 취소됨", description="모든 참가자에게 베팅금이 환불되었습니다.", color=0x7f8c8d)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-# 7) /낚시 미니게임 UI
+# 8) /낚시 미니게임 버튼
 class CatchFishButton(discord.ui.Button):
     def __init__(self, user_id, target_time):
         super().__init__(label="🎣 낚아채기!", style=discord.ButtonStyle.success)
@@ -942,7 +963,7 @@ class CatchFishButton(discord.ui.Button):
 
         now = datetime.now().timestamp()
         if now > self.target_time + 3.5:
-            await interaction.response.edit_message(content="🐟 반응이 늦어 물고기가 떡밥만 먹고 도망쳤습니다...", view=None)
+            await interaction.response.edit_message(content="🐟 반응이 늦어 물고기가 도망쳤습니다...", view=None)
             return
 
         data = load_data()
@@ -962,31 +983,31 @@ class CatchFishButton(discord.ui.Button):
                 g = random.randint(50000, 150000)
                 u["money"] += g
                 res_title = "🎁 [보물] 침몰한 보물상자"
-                res_desc = f"보물상자를 열어 💰 **+{g:,}원**을 획득했습니다!"
+                res_desc = f"보물상자에서 💰 **+{g:,}원** 획득!"
             elif box_rand == "stone":
                 s = random.randint(3, 5)
                 u["inventory"]["강화석"] += s
                 res_title = "🎁 [보물] 침몰한 보물상자"
-                res_desc = f"보물상자를 열어 ✨ **강화석 {s}개**를 획득했습니다!"
+                res_desc = f"보물상자에서 ✨ **강화석 {s}개** 획득!"
             else:
                 arts = ["똥먹방 비법서", "차은우지성 조각상", "170KG 비법서", "곤지암병원 지도", "L을 가져가 비법서"]
                 art = random.choice(arts)
                 u["inventory"][art] += 1
                 res_title = "🎁 [보물] 침몰한 보물상자"
-                res_desc = f"보물상자를 열어 🏛️ **【 {art} 】**을(를) 발굴했습니다!"
+                res_desc = f"보물상자에서 🏛️ **【 {art} 】** 발굴!"
             embed_color, img_file = 0xf1c40f, "낚시_보물상자.png"
 
         elif rand < (box_r + leg_r):
             u["inventory"]["황금 잉어"] += 1
             res_title = "👑 [전설] 황금 잉어"
-            res_desc = "전설의 황금 잉어를 낚아 가방에 보관했습니다!"
+            res_desc = "황금 잉어를 낚아 가방에 보관했습니다!"
             embed_color, img_file = 0xf1c40f, "낚시_황금잉어.png"
 
         elif rand < (box_r + leg_r + rare_r):
             fish = random.choice(["참다랑어", "돗돔"])
             u["inventory"][fish] += 1
             res_title = f"🐠 [희귀] {fish}"
-            res_desc = f"귀한 {fish}을(를) 낚아 가방에 보관했습니다!"
+            res_desc = f"{fish}을(를) 낚아 가방에 보관했습니다!"
             embed_color = 0x3498db
             img_file = f"낚시_{fish}.png"
 
@@ -1048,7 +1069,7 @@ async def my_info(interaction: discord.Interaction):
             price = p["price"] if isinstance(p, dict) else p
             total_wealth += price * count
 
-    embed = discord.Embed(title=f"👤 {interaction.user.display_name}님의 프로필 카드", color=0x3498db)
+    embed = discord.Embed(title=f"👤 {interaction.user.display_name}님의 프로필", color=0x3498db)
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
     eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
@@ -1060,12 +1081,12 @@ async def my_info(interaction: discord.Interaction):
     embed.add_field(name="🎣 장착 낚싯대", value=f"**{eq_rod_name}**", inline=True)
     embed.add_field(name="💃 춤 숙련도", value=f"**Lv.{u['dance_level']}** ({u['dance_count']}회)", inline=True)
     embed.add_field(name="📅 연속 출석", value=f"**{u['attendance_streak']}일째**", inline=True)
-    embed.set_footer(text="💡 소지품 확인 및 소모품 사용, 낚싯대 교체는 [/가방]을 이용하세요!")
+    embed.set_footer(text="💡 소지품 확인 및 장비 교체는 [/가방]을 이용하세요!")
 
     await interaction.response.send_message(embed=embed)
 
 # 2) /가방
-@bot.tree.command(name="가방", description="소지품 확인, 소모품 사용, 낚싯대 변경 및 물고기 일괄 매도를 진행합니다.")
+@bot.tree.command(name="가방", description="소지품 확인, 소모품 사용 및 물고기 일괄 매도를 진행합니다.")
 async def bag(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
@@ -1073,14 +1094,14 @@ async def bag(interaction: discord.Interaction):
     view = BagView(interaction.user.id, u.get("owned_rods", [0]))
     await interaction.response.send_message(embed=embed, view=view)
 
-# 3) /주식 (통합 거래 대시보드)
+# 3) /주식
 @bot.tree.command(name="주식", description="실시간 주식 시세를 확인하고 바로 매수/매도합니다.")
 async def stock_dashboard(interaction: discord.Interaction):
     embed = build_stock_embed(interaction.user)
     view = StockView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 4) /유물 (통합 거래 대시보드)
+# 4) /유물
 @bot.tree.command(name="유물", description="실시간 고대 유물 시세를 확인하고 바로 매도합니다.")
 async def artifact_dashboard(interaction: discord.Interaction):
     embed = build_artifact_embed(interaction.user)
@@ -1098,7 +1119,7 @@ async def attendance(interaction: discord.Interaction):
     yesterday_str = (now_kst - timedelta(days=1)).strftime("%Y-%m-%d")
 
     if u["last_check_date"] == today_str:
-        await interaction.response.send_message("❌ 오늘은 이미 출석체크를 완료했습니다! (매일 밤 12시 초기화)", ephemeral=True)
+        await interaction.response.send_message("❌ 오늘은 이미 출석체크를 완료했습니다!", ephemeral=True)
         return
 
     if u["last_check_date"] == yesterday_str:
@@ -1118,13 +1139,13 @@ async def attendance(interaction: discord.Interaction):
 
     embed = discord.Embed(title="📅 출석체크 완료!", color=0x2ecc71)
     embed.set_thumbnail(url=get_img_url("출석체크.png"))
-    embed.add_field(name="연속 출석", value=f"**{streak}일째** 달성!", inline=False)
-    embed.add_field(name="출석 보상", value=f"💰 **+{reward:,}원** 지급", inline=False)
+    embed.add_field(name="연속 출석", value=f"**{streak}일째**", inline=False)
+    embed.add_field(name="보상", value=f"💰 **+{reward:,}원**", inline=False)
     embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
     await interaction.response.send_message(embed=embed)
 
 # 6) /송금
-@bot.tree.command(name="송금", description="서버 유저에게 돈을 보냅니다. (하루 3회, 한도 없음)")
+@bot.tree.command(name="송금", description="서버 유저에게 돈을 보냅니다. (하루 3회)")
 async def transfer(interaction: discord.Interaction, 받으실분: discord.Member, 금액: int):
     if 금액 <= 0:
         await interaction.response.send_message("❌ 1원 이상 송금 가능합니다.", ephemeral=True)
@@ -1141,11 +1162,7 @@ async def transfer(interaction: discord.Interaction, 받으실분: discord.Membe
     receiver = get_user_data(data, 받으실분.id)
 
     if sender["remittance_count_today"] >= 3:
-        await interaction.response.send_message("❌ 오늘 일일 송금 횟수(3회)를 모두 소진하셨습니다.", ephemeral=True)
-        return
-
-    if sender["money"] < 금액:
-        await interaction.response.send_message("❌ 소지한 현금이 부족합니다.", ephemeral=True)
+        await interaction.response.send_message("❌ 오늘 일일 송금 횟수(3회)를 모두 사용하셨습니다.", ephemeral=True)
         return
 
     sender["money"] -= 금액
@@ -1174,11 +1191,11 @@ async def dance(interaction: discord.Interaction):
     now = datetime.now().timestamp()
     if now - u["last_dance_time"] < cd:
         remain = int(cd - (now - u["last_dance_time"]))
-        await interaction.response.send_message(f"⏳ 지쳤습니다! {remain}초 후에 다시 춤출 수 있습니다.", ephemeral=True)
+        await interaction.response.send_message(f"⏳ 지쳤습니다! {remain}초 후 다시 가능합니다.", ephemeral=True)
         return
 
     if u["fatigue"] < fatigue_cost:
-        await interaction.response.send_message("❌ 피로도가 부족합니다! (자정 회복 또는 상점 음료 필요)", ephemeral=True)
+        await interaction.response.send_message("❌ 피로도가 부족합니다!", ephemeral=True)
         return
 
     u["fatigue"] -= fatigue_cost
@@ -1195,42 +1212,42 @@ async def dance(interaction: discord.Interaction):
 
     if rand < 25:
         u["money"] += 500
-        msg = "소소하게 엉덩이를 털었다. 지나가던 초등학생이 짠했는지 동전을 던져주고 갔다."
+        msg = "소소하게 엉덩이를 털어 동전을 얻었다."
         reward_str, img_file = "💰 +500원", "춤_일반.png"
     elif rand < 60:
         u["money"] += 1000
-        msg = "길거리에서 뻣뻣한 춤을 췄다. 행인이 구경값으로 돈을 내밀었다."
+        msg = "길거리에서 뻣뻣한 춤을 췄다."
         reward_str, img_file = "💰 +1,000원", "춤_일반.png"
     elif rand < 75:
         u["money"] += 3000
-        msg = "현란한 팝핀을 선보였다! 지나가던 인플루언서가 감탄했다."
+        msg = "현란한 팝핀을 선보였다!"
         reward_str, embed_color, img_file = "💰 +3,000원", 0x3498db, "춤_레어.png"
     elif rand < 85:
         u["money"] += 5000
-        msg = "리듬에 몸을 맡기고 디스코 댄스를 폭발시켰다!"
+        msg = "디스코 댄스를 폭발시켰다!"
         reward_str, embed_color, img_file = "💰 +5,000원", 0x3498db, "춤_레어.png"
     elif rand < 92:
         u["money"] += 10000
-        msg = "★대폭발★ 길거리가 순식간에 클럽으로 변했다!"
+        msg = "★대폭발★ 클럽 분위기를 연출했다!"
         reward_str, embed_color, img_file = "💰 +10,000원", 0x9b59b6, "춤_에픽.png"
     elif rand < 95:
         u["money"] += 50000
-        msg = "중력을 무시하는 브레이크 댄스! 대기업 회장님이 관람료를 후하게 던졌다!"
+        msg = "중력을 무시하는 브레이크 댄스!"
         reward_str, embed_color, img_file = "💰 +50,000원", 0x9b59b6, "춤_에픽.png"
     elif rand < 97:
         u["money"] += 100000
-        msg = "✨[전설의 춤신춤왕]✨ 하늘에서 빛이 내리쬐며 디스코 볼이 돌아간다!"
+        msg = "✨[전설의 춤신춤왕]✨ 디스코 볼이 돈다!"
         reward_str, embed_color, img_file = "💰 +100,000원", 0xf1c40f, "춤_전설.png"
     elif rand < 98:
         u["inventory"]["강화석"] += 1
-        msg = "✨ 열정적인 춤 끝에 바닥에서 번쩍이는 강화석을 주웠다!"
-        reward_str, embed_color, img_file = "✨ 강화석 1개 획득", 0xe67e22, "춤_강화석.png"
+        msg = "✨ 춤추던 중 바닥에서 강화석을 주웠다!"
+        reward_str, embed_color, img_file = "✨ 강화석 1개", 0xe67e22, "춤_강화석.png"
     else:
         artifacts = ["똥먹방 비법서", "차은우지성 조각상", "170KG 비법서", "곤지암병원 지도", "L을 가져가 비법서"]
         art = random.choice(artifacts)
         u["inventory"][art] += 1
-        msg = f"✨ 봉인되어 있던 고대의 유물 【 {art} 】을(를) 발굴했다!"
-        reward_str, embed_color = f"🏛️ {art} 1개 획득", 0xf1c40f
+        msg = f"✨ 고대의 유물 【 {art} 】을(를) 발굴했다!"
+        reward_str, embed_color = f"🏛️ {art} 1개", 0xf1c40f
         art_map = {
             "똥먹방 비법서": "유물_똥먹방비법서.png",
             "차은우지성 조각상": "유물_차은우지성조각상.png",
@@ -1263,25 +1280,23 @@ async def dance(interaction: discord.Interaction):
 ])
 async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
     if 개수 <= 0:
-        await interaction.response.send_message("❌ 1개 이상 구매해주세요.", ephemeral=True)
+        await interaction.response.send_message("❌ 1개 이상 입력하세요.", ephemeral=True)
         return
 
     data = load_data()
     u = get_user_data(data, interaction.user.id)
 
-    rod_buy_map = {
-        "대나무 낚싯대": 1, "카본 낚싯대": 2, "티타늄 낚싯대": 3, "트라이아나": 4
-    }
+    rod_buy_map = {"대나무 낚싯대": 1, "카본 낚싯대": 2, "티타늄 낚싯대": 3, "트라이아나": 4}
 
     if 품목 in rod_buy_map:
         rod_id = rod_buy_map[품목]
         cost = ROD_DATA[rod_id]["price"]
         if rod_id in u.get("owned_rods", [0]):
-            await interaction.response.send_message("❌ 이미 소유하고 있는 낚싯대입니다!", ephemeral=True)
+            await interaction.response.send_message("❌ 이미 소유한 낚싯대입니다!", ephemeral=True)
             return
 
         if u["money"] < cost:
-            await interaction.response.send_message(f"❌ 소지금이 부족합니다. (필요 금액: {cost:,}원)", ephemeral=True)
+            await interaction.response.send_message(f"❌ 소지금이 부족합니다. ({cost:,}원 필요)", ephemeral=True)
             return
 
         u["money"] -= cost
@@ -1289,7 +1304,7 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
         u["equipped_rod"] = rod_id
         save_data(data)
 
-        await interaction.response.send_message(f"🎣 **[{ROD_DATA[rod_id]['name']}]**(을)를 {cost:,}원에 구매 및 바로 장착했습니다!")
+        await interaction.response.send_message(f"🎣 **[{ROD_DATA[rod_id]['name']}]** 구매 및 자동 장착 완료!")
         return
 
     prices = {
@@ -1304,7 +1319,7 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
 
     cost = prices[품목] * 개수
     if u["money"] < cost:
-        await interaction.response.send_message(f"❌ 소지 금액이 부족합니다. (필요 금액: {cost:,}원)", ephemeral=True)
+        await interaction.response.send_message(f"❌ 소지금이 부족합니다. ({cost:,}원 필요)", ephemeral=True)
         return
 
     u["money"] -= cost
@@ -1312,7 +1327,7 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
     else: u["inventory"][품목] += 개수
 
     save_data(data)
-    embed = discord.Embed(title="🛒 상점 구매 완료", description=f"[{품목}] {개수}개를 총 {cost:,}원에 구매했습니다!", color=0x2ecc71)
+    embed = discord.Embed(title="🛒 상점 구매 완료", description=f"[{품목}] {개수}개 구매 완료! (-{cost:,}원)", color=0x2ecc71)
     embed.set_thumbnail(url=get_img_url(shop_img_map.get(품목, "상점_강화석.png")))
     await interaction.response.send_message(embed=embed)
 
@@ -1330,7 +1345,7 @@ GAMBLE_IMG_MAP = {
     "애를 가져가~": "권루트_애를가져가.png", "스텝 댄싱": "권루트_스텝댄싱.png", "포탈 오류": "권루트_포탈오류.png"
 }
 
-@bot.tree.command(name="도박", description="게임 컨셉의 도박을 진행합니다. (최소 1,000원 이상)")
+@bot.tree.command(name="도박", description="게임 컨셉의 도박을 진행합니다. (마이너스 손실 가능)")
 @app_commands.choices(종류=[
     app_commands.Choice(name="⛏️ 마인크래프트 (초안전형)", value="마크"),
     app_commands.Choice(name="⚔️ 리그 오브 레전드 (밸런스형)", value="롤"),
@@ -1339,27 +1354,18 @@ GAMBLE_IMG_MAP = {
 ])
 async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     if 베팅금 < 1000:
-        await interaction.response.send_message("❌ 도박 최소 베팅 금액은 **1,000원** 이상입니다.", ephemeral=True)
+        await interaction.response.send_message("❌ 최소 베팅금은 **1,000원** 이상입니다.", ephemeral=True)
         return
 
     data = load_data()
     u = get_user_data(data, interaction.user.id)
 
-    if u["money"] < 베팅금:
-        await interaction.response.send_message("❌ 소지한 현금이 부족합니다.", ephemeral=True)
-        return
-
     await interaction.response.defer()
-    loading_embed = discord.Embed(title="🎰 도박 진행 중...", description="결과를 계산하고 있습니다.", color=0x95a5a6)
+    loading_embed = discord.Embed(title="🎰 도박 진행 중...", description="결과를 정산하고 있습니다...", color=0x95a5a6)
     loading_embed.set_thumbnail(url=get_img_url(f"도박_{종류}.png"))
 
-    if 종류 == "마크": loading_embed.description = "⛏️ 깊은 굴을 파고 들어가는 중..."
-    elif 종류 == "롤": loading_embed.description = "⚔️ 픽창에 들어섰습니다..."
-    elif 종류 == "발로란트": loading_embed.description = "🔫 에임 연습하는 중..."
-    elif 종류 == "권루트": loading_embed.description = "💃 권루트 댄스를 시전하는 중..."
-
     msg = await interaction.followup.send(embed=loading_embed)
-    await asyncio.sleep(2)
+    await asyncio.sleep(1.5)
 
     rand = random.random() * 100
     mult, result_title, embed_color = 0, "", 0x2ecc71
@@ -1414,7 +1420,7 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
         u["money"] += change_amount
         res_str = f"🎉 **+{change_amount:,}원** 이득!"
     else:
-        u["money"] = max(0, u["money"] - change_amount)
+        u["money"] -= change_amount # 마이너스 통장 허용
         res_str = f"💥 **-{change_amount:,}원** 손실..."
 
     save_data(data)
@@ -1431,7 +1437,47 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     res_embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
     await msg.edit(embed=res_embed)
 
-# 10) /강화
+# 10) /도박확률 (신설)
+@bot.tree.command(name="도박확률", description="도박 종류별 당첨 확률과 배율 안내표를 확인합니다.")
+async def gamble_rates(interaction: discord.Interaction):
+    embed = discord.Embed(title="📊 도박 종류별 확률 & 배율표", color=0x3498db)
+    
+    mc_info = (
+        "• 엔더드래곤 (0.2% / x30) | 네더라이트 (4.0% / x5)\n"
+        "• 다이아몬드 (10.0% / x2) | 철 발견 (28.8% / x1)\n"
+        "• 평화로운 하루 (12.0% / x0) | 크리퍼 폭발 (29.0% / -x1)\n"
+        "• 용암 사망 (11.0% / -x2) | 정전/엄크 (5.0% / -x5)"
+    )
+    lol_info = (
+        "• 챌린저 (0.02% / x100) | 그랜드마스터 (0.04% / x50)\n"
+        "• 마스터 (0.34% / x20) | 다이아몬드 (2.60% / x5)\n"
+        "• 에메랄드 (5.00% / x3) | 플래티넘 (9.50% / x2)\n"
+        "• 골드 (28.00% / x1) | 실버 (30.00% / -x1)\n"
+        "• 브론즈 (20.00% / -x2) | 아이언 (4.50% / -x5)"
+    )
+    val_info = (
+        "• 레디언트 (0.02% / x100) | 불멸 (0.04% / x50)\n"
+        "• 초월자 (0.34% / x20) | 다이아몬드 (3.60% / x5)\n"
+        "• 플래티넘 (9.50% / x2) | 골드 (32.00% / x1)\n"
+        "• 실버 (30.00% / -x1) | 브론즈 (20.00% / -x2)\n"
+        "• 아이언 (4.50% / -x5)"
+    )
+    kwon_info = (
+        "• L을 가져가~ (0.01% / x200) | 측면 대 측면 (0.03% / x80)\n"
+        "• 셀카 (0.26% / x30) | 팁 토 (2.70% / x10)\n"
+        "• 기분에 따라 (7.00% / x3) | 라운드 앤 라운드 (20.00% / x1.5)\n"
+        "• 애를 가져가~ (35.00% / -x1) | 스텝 댄싱 (25.00% / -x3)\n"
+        "• 포탈 오류 (10.00% / -x10)"
+    )
+
+    embed.add_field(name="⛏️ 마인크래프트 (초안전형)", value=mc_info, inline=False)
+    embed.add_field(name="⚔️ 리그 오브 레전드 (밸런스형)", value=lol_info, inline=False)
+    embed.add_field(name="🔫 발로란트 (고위험형)", value=val_info, inline=False)
+    embed.add_field(name="🕺 권루트 (극단적 초고위험 200배)", value=kwon_info, inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+# 11) /강화
 @bot.tree.command(name="강화", description="자동차 정비소를 열어 차를 연속으로 강화합니다.")
 async def upgrade(interaction: discord.Interaction):
     data = load_data()
@@ -1440,7 +1486,7 @@ async def upgrade(interaction: discord.Interaction):
     view = UpgradeView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 11) /순위
+# 12) /순위
 @bot.tree.command(name="순위", description="부자 및 소유 차 랭킹을 확인합니다.")
 @app_commands.choices(종류=[
     app_commands.Choice(name="💰 부자 랭킹", value="부자"),
@@ -1480,29 +1526,42 @@ async def ranking(interaction: discord.Interaction, 종류: str):
 
     await interaction.response.send_message(embed=embed)
 
-# 12) /주사위대결
-@bot.tree.command(name="주사위대결", description="다른 유저와 돈을 걸고 1v1 주사위 대결을 신청합니다. (3분 제한)")
+# 13) /주사위대결
+@bot.tree.command(name="주사위대결", description="다른 유저와 돈을 걸고 1v1 주사위 대결을 신청합니다.")
 async def dice_duel(interaction: discord.Interaction, 베팅금: int):
     if 베팅금 < 1000:
-        await interaction.response.send_message("❌ 최소 베팅 금액은 **1,000원** 이상입니다.", ephemeral=True)
+        await interaction.response.send_message("❌ 최소 베팅금은 **1,000원** 이상입니다.", ephemeral=True)
         return
 
     data = load_data()
     host = get_user_data(data, interaction.user.id)
 
-    if host["money"] < 베팅금:
-        await interaction.response.send_message("❌ 소지한 현금이 부족합니다.", ephemeral=True)
-        return
-
     host["money"] -= 베팅금
     save_data(data)
 
-    embed = discord.Embed(title="🎲 1v1 주사위 대결 대기 중 (3분 후 환불)", description=f"**{interaction.user.display_name}**님이 **{베팅금:,}원** 주사위 대결을 열었습니다!\n지나가던 누구나 아래 버튼을 눌러 난입하세요!", color=0x3498db)
+    embed = discord.Embed(title="🎲 1v1 주사위 대결 (3분 제한)", description=f"**{interaction.user.display_name}**님이 **{베팅금:,}원** 대결을 생성했습니다!", color=0x3498db)
     view = DiceDuelView(interaction.user, 베팅금)
     await interaction.response.send_message(embed=embed, view=view)
     view.message = await interaction.original_response()
 
-# 13) /경마개장
+# 14) /가위바위보 (신설)
+@bot.tree.command(name="가위바위보", description="비공개 선택 방식의 1v1 가위바위보 심리전 대결을 엽니다.")
+async def rps_game(interaction: discord.Interaction, 판돈: int):
+    if 판돈 < 1000:
+        await interaction.response.send_message("❌ 최소 판돈은 **1,000원** 이상입니다.", ephemeral=True)
+        return
+
+    data = load_data()
+    host = get_user_data(data, interaction.user.id)
+
+    host["money"] -= 판돈
+    save_data(data)
+
+    embed = discord.Embed(title="⚔️ 1v1 가위바위보 대결 대기실", description=f"**{interaction.user.display_name}**님이 **{판돈:,}원** 판돈의 가위바위보 대결을 엽니다!", color=0xe67e22)
+    view = RPSLobbyView(interaction.user, 판돈)
+    await interaction.response.send_message(embed=embed, view=view)
+
+# 15) /경마개장
 @bot.tree.command(name="경마개장", description="서버 유저들과 함께 즐기는 2~4인 실시간 경마장을 개장합니다.")
 async def open_horse_race(interaction: discord.Interaction, 판돈: int):
     if 판돈 < 1000:
@@ -1512,17 +1571,57 @@ async def open_horse_race(interaction: discord.Interaction, 판돈: int):
     data = load_data()
     host = get_user_data(data, interaction.user.id)
 
-    if host["money"] < 판돈:
-        await interaction.response.send_message("❌ 판돈 개장에 필요한 현금이 부족합니다.", ephemeral=True)
-        return
-
     host["money"] -= 판돈
     save_data(data)
 
     view = HorseRaceView(interaction.user, 판돈)
     await interaction.response.send_message(embed=view.build_embed(), view=view)
 
-# 14) /낚시 (1분 쿨타임 + 5~12초 랜덤 입질 대기)
+# 16) /파산신청 (신설 - 빚 탕감 룰렛)
+@bot.tree.command(name="파산신청", description="잔액이 마이너스(빚)일 때 하루 1회 채무 감면 룰렛을 진행합니다.")
+async def bankruptcy_relief(interaction: discord.Interaction):
+    data = load_data()
+    u = get_user_data(data, interaction.user.id)
+
+    if u["money"] >= 0:
+        await interaction.response.send_message("❌ 현금이 마이너스(빚) 상태일 때만 파산신청이 가능합니다!", ephemeral=True)
+        return
+
+    now_kst = datetime.now(KST)
+    today_str = now_kst.strftime("%Y-%m-%d")
+
+    if u.get("last_bankrupt_date", "") == today_str:
+        await interaction.response.send_message("❌ 파산신청은 하루에 한 번만 가능합니다. (내일 다시 시도하세요)", ephemeral=True)
+        return
+
+    debt = abs(u["money"])
+    rand = random.random() * 100
+
+    if rand < 15:
+        # 100% 전액 탕감 (15%)
+        u["money"] = 0
+        res_str = f"🎉 **[100% 전액 면제!!]** 법원에서 빚 **{debt:,}원**을 전액 탕감해 주었습니다!"
+        color = 0xf1c40f
+    elif rand < 50:
+        # 70% 감면 (35%)
+        reduced = int(debt * 0.7)
+        u["money"] = int(u["money"] * 0.3)
+        res_str = f"✨ **[70% 대폭 감면!]** 빚 중 **{reduced:,}원**이 탕감되어 남은 빚은 **{abs(u['money']):,}원**입니다."
+        color = 0x3498db
+    else:
+        # 50% 감면 (50%)
+        reduced = int(debt * 0.5)
+        u["money"] = int(u["money"] * 0.5)
+        res_str = f"👍 **[50% 절반 감면!]** 빚 중 **{reduced:,}원**이 탕감되어 남은 빚은 **{abs(u['money']):,}원**입니다."
+        color = 0x2ecc71
+
+    u["last_bankrupt_date"] = today_str
+    save_data(data)
+
+    embed = discord.Embed(title="⚖️ 개인회생 파산신청 결과", description=res_str, color=color)
+    await interaction.response.send_message(embed=embed)
+
+# 17) /낚시
 @bot.tree.command(name="낚시", description="찌를 물에 던져 물고기나 보물상자를 낚습니다.")
 async def fishing(interaction: discord.Interaction):
     data = load_data()
@@ -1531,7 +1630,7 @@ async def fishing(interaction: discord.Interaction):
     now = datetime.now().timestamp()
     if now - u.get("last_fish_time", 0) < 60:
         remain = int(60 - (now - u.get("last_fish_time", 0)))
-        await interaction.response.send_message(f"⏳ 낚싯대를 정비 중입니다! ({remain}초 후 다시 낚시 가능)", ephemeral=True)
+        await interaction.response.send_message(f"⏳ 낚싯대를 정비 중입니다! ({remain}초 후 다시 가능)", ephemeral=True)
         return
 
     rod_id = u.get("equipped_rod", 0)
@@ -1539,7 +1638,7 @@ async def fishing(interaction: discord.Interaction):
     fatigue_cost = rod_info["fatigue"]
 
     if u["fatigue"] < fatigue_cost:
-        await interaction.response.send_message(f"❌ 피로도가 부족합니다! (필요 피로도: {fatigue_cost})", ephemeral=True)
+        await interaction.response.send_message(f"❌ 피로도가 부족합니다! ({fatigue_cost} 필요)", ephemeral=True)
         return
 
     u["fatigue"] -= fatigue_cost
@@ -1548,7 +1647,6 @@ async def fishing(interaction: discord.Interaction):
 
     await interaction.response.send_message(f"🎣 **[{rod_info['name']}]**(으)로 찌를 멀리 던졌습니다... (피로도 -{fatigue_cost})")
 
-    # 5초 ~ 12초 정밀 랜덤 입질 대기
     wait_sec = random.uniform(5.0, 12.0)
     await asyncio.sleep(wait_sec)
 
