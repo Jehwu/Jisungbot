@@ -37,7 +37,7 @@ def get_fatigue_bar(fatigue, max_fatigue=100):
     return f"[{bar}] {fatigue}/{max_fatigue}"
 
 # ---------------------------------------------------------
-# 2. 데이터베이스 구조 및 마이그레이션
+# 2. 데이터베이스 구조 및 자동 마이그레이션
 # ---------------------------------------------------------
 DEFAULT_MARKET = {
     "artifacts": {
@@ -51,6 +51,14 @@ DEFAULT_MARKET = {
         "170kg전자": {"price": 500000, "prev_price": 500000},
         "L을가져닉스": {"price": 500000, "prev_price": 500000},
         "엔비티키퐁크": {"price": 500000, "prev_price": 500000}
+    },
+    "fish": {
+        "붕어": {"price": 1000, "prev_price": 1000},
+        "고등어": {"price": 1000, "prev_price": 1000},
+        "광어": {"price": 1000, "prev_price": 1000},
+        "참다랑어": {"price": 10000, "prev_price": 10000},
+        "돗돔": {"price": 10000, "prev_price": 10000},
+        "황금 잉어": {"price": 60000, "prev_price": 60000}
     }
 }
 
@@ -65,10 +73,12 @@ def load_data():
             if "market" not in data:
                 data["market"] = DEFAULT_MARKET
 
-            for category in ["artifacts", "stocks"]:
-                for k, v in data["market"][category].items():
+            for cat in ["artifacts", "stocks", "fish"]:
+                if cat not in data["market"]:
+                    data["market"][cat] = DEFAULT_MARKET[cat]
+                for k, v in data["market"][cat].items():
                     if isinstance(v, int):
-                        data["market"][category][k] = {"price": v, "prev_price": v}
+                        data["market"][cat][k] = {"price": v, "prev_price": v}
             return data
     except Exception as e:
         print(f"데이터 로딩 오류: {e}")
@@ -88,6 +98,7 @@ def get_user_data(data, user_id):
             "money": 10000,
             "fatigue": 100,
             "last_dance_time": 0,
+            "last_fish_time": 0,
             "dance_count": 0,
             "dance_level": 0,
             "drink_used_today": 0,
@@ -99,26 +110,31 @@ def get_user_data(data, user_id):
                 "똥먹방 비법서": 0, "차은우지성 조각상": 0, "170KG 비법서": 0,
                 "곤지암병원 지도": 0, "L을 가져가 비법서": 0,
                 "에너지드링크": 0, "핫식스 박스": 0, "유물 랜덤 상자": 0,
-                "강화석": 0, "파괴 방지권": 0, "하락 방지권": 0
+                "강화석": 0, "파괴 방지권": 0, "하락 방지권": 0,
+                "붕어": 0, "고등어": 0, "광어": 0, "참다랑어": 0, "돗돔": 0, "황금 잉어": 0,
+                "찢어진 장화": 0, "썩은 미역": 0, "빈 깡통": 0
             },
             "stocks": {"170kg전자": 0, "L을가져닉스": 0, "엔비티키퐁크": 0},
             "car_level": 0,
-            "owned_rods": [0],     # 소유한 낚싯대 ID 목록
-            "equipped_rod": 0      # 장착 중인 낚싯대 ID
+            "owned_rods": [0],
+            "equipped_rod": 0
         }
     else:
         u = data["users"][uid]
         u.setdefault("remittance_count_today", 0)
         u.setdefault("last_check_date", "")
         u.setdefault("attendance_streak", 0)
+        u.setdefault("last_fish_time", 0)
         u.setdefault("owned_rods", [0])
         u.setdefault("equipped_rod", 0)
+        for fish_item in ["붕어", "고등어", "광어", "참다랑어", "돗돔", "황금 잉어", "찢어진 장화", "썩은 미역", "빈 깡통"]:
+            u["inventory"].setdefault(fish_item, 0)
         if "car_level" not in u:
             u["car_level"] = u.pop("weapon_level", 0)
     return data["users"][uid]
 
 # ---------------------------------------------------------
-# 3. 차(Car) & 낚싯대 스펙 데이터
+# 3. 데이터 스펙 (차 & 낚싯대)
 # ---------------------------------------------------------
 CAR_NAMES = [
     "뚜벅이 (맨발)", "현대 아반떼", "기아 K5", "현대 그랜저", "제네시스 G80", "제네시스 G90",
@@ -131,7 +147,6 @@ CAR_NAMES = [
 ]
 
 ROD_DATA = {
-    # rates: (쓰레기, 일반, 희귀, 전설, 보물상자) %
     0: {"name": "맨손", "price": 0, "fatigue": 5, "rates": (20.0, 60.0, 16.0, 3.0, 1.0)},
     1: {"name": "대나무 낚싯대", "price": 30000, "fatigue": 7, "rates": (18.0, 58.0, 19.0, 3.5, 1.5)},
     2: {"name": "카본 낚싯대", "price": 150000, "fatigue": 9, "rates": (15.0, 55.0, 23.0, 4.5, 2.5)},
@@ -164,25 +179,40 @@ def get_upgrade_info(level):
     return gold_cost, stone_cost, success_rate, destroy_rate, degrade_rate
 
 # ---------------------------------------------------------
-# 4. 정각 주기 스케줄러 (KST 기준)
+# 4. 정각 주기 스케줄러 (유물 / 주식 / 물고기 시세 변동)
 # ---------------------------------------------------------
 artifact_times = [time(hour=h, minute=m) for h in range(24) for m in (0, 30)]
 @tasks.loop(time=artifact_times)
-async def update_artifact_prices():
+async def update_artifact_and_fish_prices():
     data = load_data()
-    base_prices = {
+    # 유물 시세
+    art_base = {
         "똥먹방 비법서": (30000, 6000, 90000),
         "차은우지성 조각상": (50000, 10000, 150000),
         "170KG 비법서": (70000, 14000, 210000),
         "곤지암병원 지도": (100000, 20000, 300000),
         "L을 가져가 비법서": (150000, 30000, 450000)
     }
-    for item, (base, min_p, max_p) in base_prices.items():
+    for item, (base, min_p, max_p) in art_base.items():
         curr_data = data["market"]["artifacts"].get(item, {"price": base, "prev_price": base})
         curr_price = curr_data["price"] if isinstance(curr_data, dict) else curr_data
         rate = random.uniform(-0.30, 0.30)
         new_price = max(min_p, min(max_p, int(curr_price * (1 + rate))))
         data["market"]["artifacts"][item] = {"price": new_price, "prev_price": curr_price}
+
+    # 물고기 시세 (30분 주기 -35% ~ +35%)
+    fish_base = {
+        "붕어": (1000, 500, 2000), "고등어": (1000, 500, 2000), "광어": (1000, 500, 2000),
+        "참다랑어": (10000, 5000, 20000), "돗돔": (10000, 5000, 20000),
+        "황금 잉어": (60000, 30000, 120000)
+    }
+    for fish_item, (base, min_p, max_p) in fish_base.items():
+        curr_data = data["market"]["fish"].get(fish_item, {"price": base, "prev_price": base})
+        curr_price = curr_data["price"] if isinstance(curr_data, dict) else curr_data
+        rate = random.uniform(-0.35, 0.35)
+        new_price = max(min_p, min(max_p, int(curr_price * (1 + rate))))
+        data["market"]["fish"][fish_item] = {"price": new_price, "prev_price": curr_price}
+
     save_data(data)
 
 stock_times = [time(hour=h, minute=0) for h in range(24)]
@@ -197,7 +227,7 @@ async def update_stock_prices():
         data["market"]["stocks"][stock] = {"price": new_price, "prev_price": curr_price}
     save_data(data)
 
-@tasks.loop(time=time(hour=15, minute=0)) # KST 00시
+@tasks.loop(time=time(hour=15, minute=0)) # KST 00시 초기화
 async def daily_reset():
     data = load_data()
     for uid, user in data["users"].items():
@@ -208,10 +238,221 @@ async def daily_reset():
     save_data(data)
 
 # ---------------------------------------------------------
-# 5. UI 컴포넌트 (/가방 /강화 /주사위대결 /경마개장 /낚시)
+# 5. MODAL 팝업창 (수량 직접 입력 매매용)
+# ---------------------------------------------------------
+class StockTradeModal(discord.ui.Modal):
+    def __init__(self, mode, stock_name, user_id):
+        title_str = f"📈 {stock_name} 매수" if mode == "buy" else f"📉 {stock_name} 매도"
+        super().__init__(title=title_str)
+        self.mode = mode
+        self.stock_name = stock_name
+        self.user_id = user_id
+        self.qty_input = discord.ui.TextInput(label="거래할 수량을 입력하세요", placeholder="예: 5", min_length=1, max_length=6)
+        self.add_item(self.qty_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qty = int(self.qty_input.value)
+            if qty <= 0: raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ 올바른 숫자를 입력해주세요.", ephemeral=True)
+            return
+
+        data = load_data()
+        u = get_user_data(data, self.user_id)
+        st_data = data["market"]["stocks"][self.stock_name]
+        price = st_data["price"] if isinstance(st_data, dict) else st_data
+        total_cost = price * qty
+
+        if self.mode == "buy":
+            if u["money"] < total_cost:
+                await interaction.response.send_message(f"❌ 소지금이 부족합니다. (필요: {total_cost:,}원)", ephemeral=True)
+                return
+            u["money"] -= total_cost
+            u["stocks"][self.stock_name] += qty
+            msg = f"📈 [{self.stock_name}] {qty}주를 총 {total_cost:,}원에 매수했습니다!"
+        else:
+            if u["stocks"].get(self.stock_name, 0) < qty:
+                await interaction.response.send_message(f"❌ 소지한 [{self.stock_name}] 주식이 부족합니다.", ephemeral=True)
+                return
+            u["stocks"][self.stock_name] -= qty
+            u["money"] += total_cost
+            msg = f"📉 [{self.stock_name}] {qty}주를 총 {total_cost:,}원에 매도했습니다!"
+
+        save_data(data)
+        await interaction.response.send_message(msg, ephemeral=True)
+
+class ArtifactSellModal(discord.ui.Modal):
+    def __init__(self, art_name, user_id):
+        super().__init__(title=f"🏛️ {art_name} 지정 매도")
+        self.art_name = art_name
+        self.user_id = user_id
+        self.qty_input = discord.ui.TextInput(label="판매할 개수를 입력하세요", placeholder="예: 1", min_length=1, max_length=5)
+        self.add_item(self.qty_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qty = int(self.qty_input.value)
+            if qty <= 0: raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ 올바른 숫자를 입력해주세요.", ephemeral=True)
+            return
+
+        data = load_data()
+        u = get_user_data(data, self.user_id)
+        if u["inventory"].get(self.art_name, 0) < qty:
+            await interaction.response.send_message(f"❌ 소지한 [{self.art_name}]이(가) 부족합니다.", ephemeral=True)
+            return
+
+        art_data = data["market"]["artifacts"][self.art_name]
+        price = art_data["price"] if isinstance(art_data, dict) else art_data
+        total = price * qty
+
+        u["inventory"][self.art_name] -= qty
+        u["money"] += total
+        save_data(data)
+
+        await interaction.response.send_message(f"✅ [{self.art_name}] {qty}개를 총 {total:,}원에 매각했습니다!", ephemeral=True)
+
+# ---------------------------------------------------------
+# 6. UI 대시보드 컴포넌트 (/주식 /유물 /가방 /강화 /대결)
 # ---------------------------------------------------------
 
-# 1) /가방 드롭다운 UI (소모품 사용 + 낚싯대 교체)
+# 1) 통합 /주식 UI
+class StockView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+
+    @discord.ui.button(label="📈 주식 매수", style=discord.ButtonStyle.green, row=0)
+    async def buy_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인의 거래 화면만 조작 가능합니다.", ephemeral=True)
+            return
+        # 선택용 드롭다운 혹은 모달 트리거
+        select_view = StockSelectTradeView(self.user_id, "buy")
+        await interaction.response.send_message("📈 매수할 종목을 선택하세요:", view=select_view, ephemeral=True)
+
+    @discord.ui.button(label="📉 주식 매도", style=discord.ButtonStyle.red, row=0)
+    async def sell_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인의 거래 화면만 조작 가능합니다.", ephemeral=True)
+            return
+        select_view = StockSelectTradeView(self.user_id, "sell")
+        await interaction.response.send_message("📉 매도할 종목을 선택하세요:", view=select_view, ephemeral=True)
+
+class StockSelectTradeView(discord.ui.View):
+    def __init__(self, user_id, mode):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.mode = mode
+        options = [
+            discord.SelectOption(label="170kg전자", value="170kg전자"),
+            discord.SelectOption(label="L을가져닉스", value="L을가져닉스"),
+            discord.SelectOption(label="엔비티키퐁크", value="엔비티키퐁크")
+        ]
+        select = discord.ui.Select(placeholder="종목을 선택하세요...", options=options)
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        stock_name = interaction.data["values"][0]
+        modal = StockTradeModal(self.mode, stock_name, self.user_id)
+        await interaction.response.send_modal(modal)
+
+def build_stock_embed(user):
+    data = load_data()
+    u = get_user_data(data, user.id)
+    stocks = data["market"]["stocks"]
+    now = datetime.now(KST)
+    rem_min = 60 - now.minute if now.minute > 0 else 60
+
+    embed = discord.Embed(title="📈 주식 거래 대시보드 (1시간 정각 변동)", color=0x3498db)
+    embed.set_thumbnail(url=get_img_url("주식시세.png"))
+
+    lines = []
+    total_stock_val = 0
+    for st, info in stocks.items():
+        price = info["price"] if isinstance(info, dict) else info
+        prev = info["prev_price"] if isinstance(info, dict) else price
+        rate = ((price - prev) / prev * 100) if prev > 0 else 0
+        status = f"▲+{rate:.1f}%" if rate > 0 else (f"▼{rate:.1f}%" if rate < 0 else "0.0%")
+
+        user_qty = u["stocks"].get(st, 0)
+        val = price * user_qty
+        total_stock_val += val
+
+        lines.append(f"• **{st}** | `{price:,}원` ({status})\n  └ 내 소지: **{user_qty:,}주** (평가액: {val:,}원)")
+
+    embed.description = "\n".join(lines)
+    embed.add_field(name="💼 총 주식 평가금액", value=f"**{total_stock_val:,}원**", inline=False)
+    embed.set_footer(text=f"⏱️ 다음 시세 변동까지: 약 {rem_min}분 남음")
+    return embed
+
+# 2) 통합 /유물 UI
+class ArtifactView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+
+    @discord.ui.button(label="💰 유물 지정 매도", style=discord.ButtonStyle.primary)
+    async def sell_art_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인의 화면만 조작 가능합니다.", ephemeral=True)
+            return
+        select_view = ArtifactSelectTradeView(self.user_id)
+        await interaction.response.send_message("🏛️ 팔고 싶은 유물을 선택하세요:", view=select_view, ephemeral=True)
+
+class ArtifactSelectTradeView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        options = [
+            discord.SelectOption(label="똥먹방 비법서", value="똥먹방 비법서"),
+            discord.SelectOption(label="차은우지성 조각상", value="차은우지성 조각상"),
+            discord.SelectOption(label="170KG 비법서", value="170KG 비법서"),
+            discord.SelectOption(label="곤지암병원 지도", value="곤지암병원 지도"),
+            discord.SelectOption(label="L을 가져가 비법서", value="L을 가져가 비법서")
+        ]
+        select = discord.ui.Select(placeholder="유물을 선택하세요...", options=options)
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        art_name = interaction.data["values"][0]
+        modal = ArtifactSellModal(art_name, self.user_id)
+        await interaction.response.send_modal(modal)
+
+def build_artifact_embed(user):
+    data = load_data()
+    u = get_user_data(data, user.id)
+    market = data["market"]["artifacts"]
+    now = datetime.now(KST)
+    rem_min = 30 - (now.minute % 30)
+
+    embed = discord.Embed(title="🏛️ 고대 유물 거래 대시보드 (30분 정각 변동)", color=0xf1c40f)
+    embed.set_thumbnail(url=get_img_url("유물시세.png"))
+
+    lines = []
+    total_art_val = 0
+    for name, info in market.items():
+        price = info["price"] if isinstance(info, dict) else info
+        prev = info["prev_price"] if isinstance(info, dict) else price
+        rate = ((price - prev) / prev * 100) if prev > 0 else 0
+        status = f"▲+{rate:.1f}%" if rate > 0 else (f"▼{rate:.1f}%" if rate < 0 else "0.0%")
+
+        user_qty = u["inventory"].get(name, 0)
+        val = price * user_qty
+        total_art_val += val
+
+        lines.append(f"• **{name}** | `{price:,}원` ({status})\n  └ 내 소지: **{user_qty}개** (평가액: {val:,}원)")
+
+    embed.description = "\n".join(lines)
+    embed.add_field(name="🏛️ 총 유물 평가금액", value=f"**{total_art_val:,}원**", inline=False)
+    embed.set_footer(text=f"⏱️ 다음 시세 변동까지: 약 {rem_min}분 남음")
+    return embed
+
+# 3) /가방 UI (물고기 전체 일괄 매도 기능 탑재)
 class BagItemSelect(discord.ui.Select):
     def __init__(self, user_id):
         self.user_id = user_id
@@ -220,11 +461,11 @@ class BagItemSelect(discord.ui.Select):
             discord.SelectOption(label="핫식스 박스", description="피로도 100 완충 (일일 1회)", emoji="⚡", value="핫식스 박스"),
             discord.SelectOption(label="유물 랜덤 상자", description="고대 유물 100% 획득", emoji="📦", value="유물 랜덤 상자")
         ]
-        super().__init__(placeholder="🥤 사용할 아이템을 선택하세요...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="🥤 소모성 아이템을 선택하여 사용...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 가방 메뉴만 조작할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인의 가방 메뉴만 조작 가능합니다.", ephemeral=True)
             return
 
         item = self.values[0]
@@ -243,7 +484,7 @@ class BagItemSelect(discord.ui.Select):
             u["inventory"][item] -= 1
             u["drink_used_today"] += 1
             u["fatigue"] = min(100, u["fatigue"] + 30)
-            msg = f"🥤 에너지드링크를 사용했습니다! (피로도: {u['fatigue']}/100)"
+            msg = f"🥤 에너지드링크를 마셨습니다! (피로도: {u['fatigue']}/100)"
 
         elif item == "핫식스 박스":
             if u["hot6_used_today"] >= 1:
@@ -278,11 +519,11 @@ class BagRodSelect(discord.ui.Select):
                 emoji="🎣",
                 value=str(rod_id)
             ))
-        super().__init__(placeholder="🎣 장착할 낚싯대를 선택하세요...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="🎣 장착할 낚싯대를 선택...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 가방 메뉴만 조작할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인의 가방 메뉴만 조작 가능합니다.", ephemeral=True)
             return
 
         rod_id = int(self.values[0])
@@ -298,26 +539,82 @@ class BagRodSelect(discord.ui.Select):
 class BagView(discord.ui.View):
     def __init__(self, user_id, owned_rods):
         super().__init__(timeout=120)
+        self.user_id = user_id
         self.add_item(BagItemSelect(user_id))
         self.add_item(BagRodSelect(user_id, owned_rods))
 
+    @discord.ui.button(label="🐟 보유 물고기 전체 매도", style=discord.ButtonStyle.success, row=2)
+    async def sell_all_fish_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인의 가방만 조작 가능합니다.", ephemeral=True)
+            return
+
+        data = load_data()
+        u = get_user_data(data, interaction.user.id)
+        fish_market = data["market"]["fish"]
+
+        fish_list = ["붕어", "고등어", "광어", "참다랑어", "돗돔", "황금 잉어"]
+        total_earned = 0
+        sold_summary = []
+
+        for f in fish_list:
+            count = u["inventory"].get(f, 0)
+            if count > 0:
+                p_info = fish_market.get(f, {"price": 1000})
+                price = p_info["price"] if isinstance(p_info, dict) else p_info
+                sum_val = price * count
+                total_earned += sum_val
+                u["inventory"][f] = 0
+                sold_summary.append(f"{f} {count}개 ({sum_val:,}원)")
+
+        if total_earned == 0:
+            await interaction.response.send_message("❌ 매각할 물고기가 가방에 없습니다.", ephemeral=True)
+            return
+
+        u["money"] += total_earned
+        save_data(data)
+
+        embed = build_bag_embed(interaction.user, u)
+        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.followup.send(f"💰 **[물고기 일괄 매도 완료]**\n• 판매 내역: {', '.join(sold_summary)}\n• 정산 금액: **+{total_earned:,}원** 획득!", ephemeral=True)
+
 def build_bag_embed(user, u):
-    embed = discord.Embed(title=f"🎒 {user.display_name}님의 가방 및 장비", color=0x9b59b6)
+    data = load_data()
+    fish_market = data["market"]["fish"]
+
+    embed = discord.Embed(title=f"🎒 {user.display_name}님의 가방 & 장비", color=0x9b59b6)
     embed.set_thumbnail(url=user.display_avatar.url)
 
     eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
-    embed.add_field(name="🎣 현재 장착 낚싯대", value=f"**[{eq_rod_name}]** (피로도 {ROD_DATA[u.get('equipped_rod', 0)]['fatigue']} 소모)", inline=False)
+    embed.add_field(name="🎣 장착 낚싯대", value=f"**[{eq_rod_name}]** (회당 피로도 {ROD_DATA[u.get('equipped_rod', 0)]['fatigue']} 소모)", inline=False)
 
     artifacts = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in DEFAULT_MARKET["artifacts"] and v > 0]
     consumables = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["에너지드링크", "핫식스 박스", "유물 랜덤 상자"] and v > 0]
     materials = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["강화석", "파괴 방지권", "하락 방지권"] and v > 0]
 
+    # 물고기 목록 및 실시간 시세 반영
+    fish_items = ["붕어", "고등어", "광어", "참다랑어", "돗돔", "황금 잉어"]
+    fish_str = []
+    total_fish_val = 0
+    for f in fish_items:
+        cnt = u["inventory"].get(f, 0)
+        if cnt > 0:
+            p_info = fish_market.get(f, {"price": 1000})
+            price = p_info["price"] if isinstance(p_info, dict) else p_info
+            val = price * cnt
+            total_fish_val += val
+            fish_str.append(f"• {f}: **{cnt}개** *(현재가: 개당 {price:,}원 / 총 {val:,}원)*")
+
+    junk_items = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["찢어진 장화", "썩은 미역", "빈 깡통"] and v > 0]
+
     embed.add_field(name="🏛️ 보유 유물", value="\n".join(artifacts) if artifacts else "없음", inline=False)
-    embed.add_field(name="🥤 소모성 아이템", value="\n".join(consumables) if consumables else "없음", inline=False)
+    embed.add_field(name=f"🐟 보유 해산물 (총 예상 매각가: {total_fish_val:,}원)", value="\n".join(fish_str) if fish_str else "없음", inline=False)
+    if junk_items: embed.add_field(name="🗑️ 낚시 잡동사니", value="\n".join(junk_items), inline=False)
+    embed.add_field(name="🥤 소모품", value="\n".join(consumables) if consumables else "없음", inline=False)
     embed.add_field(name="🛡️ 강화 재료", value="\n".join(materials) if materials else "없음", inline=False)
     return embed
 
-# 2) /강화 UI
+# 4) /강화 UI
 def build_upgrade_embed(user, u, last_result_msg=None):
     curr_lvl = u["car_level"]
 
@@ -367,7 +664,7 @@ class UpgradeView(discord.ui.View):
     @discord.ui.button(label="⚔️ 강화하기", style=discord.ButtonStyle.green)
     async def do_upgrade(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 강화 정비소만 조작할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인의 강화 정비소만 조작 가능합니다.", ephemeral=True)
             return
 
         data = load_data()
@@ -423,13 +720,13 @@ class UpgradeView(discord.ui.View):
     @discord.ui.button(label="❌ 그만두기", style=discord.ButtonStyle.red)
     async def stop_upgrade(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인의 강화 정비소만 조작할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인의 강화 정비소만 조작 가능합니다.", ephemeral=True)
             return
 
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="🛑 차량 강화를 종료했습니다.", view=self)
 
-# 3) /주사위대결 UI
+# 5) /주사위대결 UI
 class DiceDuelView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=180)
@@ -518,7 +815,7 @@ class DiceDuelView(discord.ui.View):
         embed = discord.Embed(title="🎲 주사위 대결 취소됨", description="방장에 의해 대결이 취소되고 베팅금이 환불되었습니다.", color=0x7f8c8d)
         await interaction.response.edit_message(embed=embed, view=self)
 
-# 4) /경마개장 UI
+# 6) /경마개장 UI
 class HorseRaceView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=300)
@@ -631,7 +928,7 @@ class HorseRaceView(discord.ui.View):
         embed = discord.Embed(title="🏇 경마 대회 취소됨", description="모든 참가자에게 베팅금이 환불되었습니다.", color=0x7f8c8d)
         await interaction.response.edit_message(embed=embed, view=self)
 
-# 5) /낚시 미니게임 UI
+# 7) /낚시 미니게임 UI
 class CatchFishButton(discord.ui.Button):
     def __init__(self, user_id, target_time):
         super().__init__(label="🎣 낚아채기!", style=discord.ButtonStyle.success)
@@ -652,59 +949,75 @@ class CatchFishButton(discord.ui.Button):
         u = get_user_data(data, interaction.user.id)
         rod_id = u.get("equipped_rod", 0)
 
-        # rates: (쓰레기, 일반, 희귀, 전설, 보물상자) %
         rates = ROD_DATA[rod_id]["rates"]
         trash_r, norm_r, rare_r, leg_r, box_r = rates
-
         rand = random.uniform(0, 100)
 
+        embed_color = 0x2ecc71
+        img_file = "낚시_붕어.png"
+
         if rand < box_r:
-            # 🎁 침몰한 보물상자
             box_rand = random.choice(["gold", "stone", "artifact"])
             if box_rand == "gold":
                 g = random.randint(50000, 150000)
                 u["money"] += g
-                res_msg = f"🎁 **침몰한 보물상자**를 건졌습니다! (💰 **+{g:,}원** 획득)"
+                res_title = "🎁 [보물] 침몰한 보물상자"
+                res_desc = f"보물상자를 열어 💰 **+{g:,}원**을 획득했습니다!"
             elif box_rand == "stone":
                 s = random.randint(3, 5)
                 u["inventory"]["강화석"] += s
-                res_msg = f"🎁 **침몰한 보물상자**를 건졌습니다! (✨ **강화석 {s}개** 획득)"
+                res_title = "🎁 [보물] 침몰한 보물상자"
+                res_desc = f"보물상자를 열어 ✨ **강화석 {s}개**를 획득했습니다!"
             else:
                 arts = ["똥먹방 비법서", "차은우지성 조각상", "170KG 비법서", "곤지암병원 지도", "L을 가져가 비법서"]
                 art = random.choice(arts)
                 u["inventory"][art] += 1
-                res_msg = f"🎁 **침몰한 보물상자**를 건졌습니다! (🏛️ **【 {art} 】** 발굴)"
+                res_title = "🎁 [보물] 침몰한 보물상자"
+                res_desc = f"보물상자를 열어 🏛️ **【 {art} 】**을(를) 발굴했습니다!"
+            embed_color, img_file = 0xf1c40f, "낚시_보물상자.png"
+
         elif rand < (box_r + leg_r):
-            # 👑 전설 어종 (황금 잉어)
-            g = random.randint(50000, 80000)
-            u["money"] += g
-            res_msg = f"👑 **[전설] 황금 잉어**를 낚았습니다! (💰 **+{g:,}원** 매각)"
+            u["inventory"]["황금 잉어"] += 1
+            res_title = "👑 [전설] 황금 잉어"
+            res_desc = "전설의 황금 잉어를 낚아 가방에 보관했습니다!"
+            embed_color, img_file = 0xf1c40f, "낚시_황금잉어.png"
+
         elif rand < (box_r + leg_r + rare_r):
-            # 🐠 희귀 어종
             fish = random.choice(["참다랑어", "돗돔"])
-            g = random.randint(5000, 15000)
-            u["money"] += g
-            res_msg = f"🐠 **[희귀] {fish}**를 낚았습니다! (💰 **+{g:,}원** 매각)"
+            u["inventory"][fish] += 1
+            res_title = f"🐠 [희귀] {fish}"
+            res_desc = f"귀한 {fish}을(를) 낚아 가방에 보관했습니다!"
+            embed_color = 0x3498db
+            img_file = f"낚시_{fish}.png"
+
         elif rand < (box_r + leg_r + rare_r + norm_r):
-            # 🐟 일반 어종
             fish = random.choice(["붕어", "고등어", "광어"])
-            g = random.randint(500, 2000)
-            u["money"] += g
-            res_msg = f"🐟 **[일반] {fish}**를 낚았습니다! (💰 **+{g:,}원** 매각)"
+            u["inventory"][fish] += 1
+            res_title = f"🐟 [일반] {fish}"
+            res_desc = f"{fish}을(를) 낚아 가방에 보관했습니다!"
+            img_file = f"낚시_{fish}.png"
+
         else:
-            # 🗑️ 쓰레기
             trash = random.choice(["찢어진 장화", "썩은 미역", "빈 깡통"])
-            res_msg = f"🗑️ **{trash}**을(를) 낚았습니다... (0원)"
+            u["inventory"][trash] += 1
+            res_title = f"🗑️ {trash}"
+            res_desc = f"{trash}을(를) 낚았습니다..."
+            embed_color = 0x95a5a6
+            img_file = "낚시_쓰레기.png"
 
         save_data(data)
-        await interaction.response.edit_message(content=f"🎣 {res_msg}", view=None)
+
+        res_embed = discord.Embed(title=res_title, description=res_desc, color=embed_color)
+        res_embed.set_image(url=get_img_url(img_file))
+        res_embed.set_footer(text=f"⏱️ 남은 피로도: {u['fatigue']}/100")
+        await interaction.response.edit_message(content=None, embed=res_embed, view=None)
 
 # ---------------------------------------------------------
-# 6. 봇 동기화 이벤트
+# 7. 봇 동기화 이벤트
 # ---------------------------------------------------------
 @bot.event
 async def on_ready():
-    if not update_artifact_prices.is_running(): update_artifact_prices.start()
+    if not update_artifact_and_fish_prices.is_running(): update_artifact_and_fish_prices.start()
     if not update_stock_prices.is_running(): update_stock_prices.start()
     if not daily_reset.is_running(): daily_reset.start()
     try:
@@ -714,7 +1027,7 @@ async def on_ready():
         print(f"동기화 오류: {e}")
 
 # ---------------------------------------------------------
-# 7. 전체 슬래시 명령어
+# 8. 전체 슬래시 명령어
 # ---------------------------------------------------------
 
 # 1) /내정보
@@ -752,7 +1065,7 @@ async def my_info(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # 2) /가방
-@bot.tree.command(name="가방", description="소지품을 확인하고 소모품 사용 및 낚싯대를 변경합니다.")
+@bot.tree.command(name="가방", description="소지품 확인, 소모품 사용, 낚싯대 변경 및 물고기 일괄 매도를 진행합니다.")
 async def bag(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
@@ -760,7 +1073,21 @@ async def bag(interaction: discord.Interaction):
     view = BagView(interaction.user.id, u.get("owned_rods", [0]))
     await interaction.response.send_message(embed=embed, view=view)
 
-# 3) /출석체크
+# 3) /주식 (통합 거래 대시보드)
+@bot.tree.command(name="주식", description="실시간 주식 시세를 확인하고 바로 매수/매도합니다.")
+async def stock_dashboard(interaction: discord.Interaction):
+    embed = build_stock_embed(interaction.user)
+    view = StockView(interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view)
+
+# 4) /유물 (통합 거래 대시보드)
+@bot.tree.command(name="유물", description="실시간 고대 유물 시세를 확인하고 바로 매도합니다.")
+async def artifact_dashboard(interaction: discord.Interaction):
+    embed = build_artifact_embed(interaction.user)
+    view = ArtifactView(interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view)
+
+# 5) /출석체크
 @bot.tree.command(name="출석체크", description="매일 출석체크를 하여 연속 보상을 받습니다.")
 async def attendance(interaction: discord.Interaction):
     data = load_data()
@@ -796,7 +1123,7 @@ async def attendance(interaction: discord.Interaction):
     embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
     await interaction.response.send_message(embed=embed)
 
-# 4) /송금
+# 6) /송금
 @bot.tree.command(name="송금", description="서버 유저에게 돈을 보냅니다. (하루 3회, 한도 없음)")
 async def transfer(interaction: discord.Interaction, 받으실분: discord.Member, 금액: int):
     if 금액 <= 0:
@@ -834,7 +1161,7 @@ async def transfer(interaction: discord.Interaction, 받으실분: discord.Membe
     embed.set_footer(text=f"오늘 남은 송금 횟수: {3 - sender['remittance_count_today']}회")
     await interaction.response.send_message(embed=embed)
 
-# 5) /춤추기
+# 7) /춤추기
 @bot.tree.command(name="춤추기", description="춤을 춰서 돈, 유물, 강화석을 얻습니다.")
 async def dance(interaction: discord.Interaction):
     data = load_data()
@@ -920,64 +1247,7 @@ async def dance(interaction: discord.Interaction):
     embed.set_footer(text=f"남은 피로도: {u['fatigue']}/100")
     await interaction.response.send_message(embed=embed)
 
-# 6) /유물시세
-@bot.tree.command(name="유물시세", description="30분 정각마다 변하는 유물 시세를 확인합니다.")
-async def artifact_prices(interaction: discord.Interaction):
-    data = load_data()
-    market = data["market"]["artifacts"]
-    now = datetime.now(KST)
-    rem_min = 30 - (now.minute % 30)
-
-    embed = discord.Embed(title="🏛️ 유물 실시간 시세표 (30분 주기 변동)", color=0xf1c40f)
-    embed.set_thumbnail(url=get_img_url("유물시세.png"))
-
-    lines = []
-    for name, info in market.items():
-        price = info["price"] if isinstance(info, dict) else info
-        prev = info["prev_price"] if isinstance(info, dict) else price
-        diff = price - prev
-        rate = ((price - prev) / prev * 100) if prev > 0 else 0
-
-        if diff > 0: status = f"▲ +{diff:,}원 (+{rate:.1f}%)"
-        elif diff < 0: status = f"▼ -{abs(diff):,}원 ({rate:.1f}%)"
-        else: status = "➖ 0원 (0.0%)"
-
-        lines.append(f"• **{name}** | `{price:,}원` ({status})")
-
-    embed.description = "\n".join(lines)
-    embed.set_footer(text=f"⏱️ 다음 시세 갱신까지: 약 {rem_min}분 남음")
-    await interaction.response.send_message(embed=embed)
-
-# 7) /유물판매
-@bot.tree.command(name="유물판매", description="소지한 유물을 판매합니다.")
-@app_commands.choices(유물명=[
-    app_commands.Choice(name="똥먹방 비법서", value="똥먹방 비법서"),
-    app_commands.Choice(name="차은우지성 조각상", value="차은우지성 조각상"),
-    app_commands.Choice(name="170KG 비법서", value="170KG 비법서"),
-    app_commands.Choice(name="곤지암병원 지도", value="곤지암병원 지도"),
-    app_commands.Choice(name="L을 가져가 비법서", value="L을 가져가 비법서")
-])
-async def sell_artifact(interaction: discord.Interaction, 유물명: str, 개수: int):
-    if 개수 <= 0:
-        await interaction.response.send_message("❌ 1개 이상 입력해주세요.", ephemeral=True)
-        return
-
-    data = load_data()
-    u = get_user_data(data, interaction.user.id)
-    if u["inventory"].get(유물명, 0) < 개수:
-        await interaction.response.send_message(f"❌ 소지한 [{유물명}]이(가) 부족합니다.", ephemeral=True)
-        return
-
-    art_data = data["market"]["artifacts"][유물명]
-    price = art_data["price"] if isinstance(art_data, dict) else art_data
-    total = price * 개수
-    u["inventory"][유물명] -= 개수
-    u["money"] += total
-
-    save_data(data)
-    await interaction.response.send_message(f"✅ [{유물명}] {개수}개를 개당 {price:,}원 (총 {total:,}원)에 매각했습니다!")
-
-# 8) /상점 (소모품 + 낚싯대 확장)
+# 8) /상점
 @bot.tree.command(name="상점", description="회복제, 유물상자, 강화재료 및 낚싯대를 구매합니다.")
 @app_commands.choices(품목=[
     app_commands.Choice(name="🥤 에너지드링크 (+30 피로도) - 10,000원", value="에너지드링크"),
@@ -1161,90 +1431,7 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     res_embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
     await msg.edit(embed=res_embed)
 
-# 10) /주식시세
-@bot.tree.command(name="주식시세", description="1시간 정각마다 변동하는 주식 시세를 확인합니다.")
-async def stock_prices(interaction: discord.Interaction):
-    data = load_data()
-    stocks = data["market"]["stocks"]
-    now = datetime.now(KST)
-    rem_min = 60 - now.minute if now.minute > 0 else 60
-
-    embed = discord.Embed(title="📈 주식 실시간 시세표 (1시간 주기 변동)", color=0x3498db)
-    embed.set_thumbnail(url=get_img_url("주식시세.png"))
-
-    lines = []
-    for st, info in stocks.items():
-        price = info["price"] if isinstance(info, dict) else info
-        prev = info["prev_price"] if isinstance(info, dict) else price
-        diff = price - prev
-        rate = ((price - prev) / prev * 100) if prev > 0 else 0
-
-        if diff > 0: status = f"▲ +{diff:,}원 (+{rate:.1f}%)"
-        elif diff < 0: status = f"▼ -{abs(diff):,}원 ({rate:.1f}%)"
-        else: status = "➖ 0원 (0.0%)"
-
-        lines.append(f"• **{st}** | `{price:,}원` ({status})")
-
-    embed.description = "\n".join(lines)
-    embed.set_footer(text=f"⏱️ 다음 시세 갱신까지: 약 {rem_min}분 남음")
-    await interaction.response.send_message(embed=embed)
-
-# 11) /주식매수
-@bot.tree.command(name="주식매수", description="주식을 매수합니다.")
-@app_commands.choices(종목=[
-    app_commands.Choice(name="170kg전자", value="170kg전자"),
-    app_commands.Choice(name="L을가져닉스", value="L을가져닉스"),
-    app_commands.Choice(name="엔비티키퐁크", value="엔비티키퐁크")
-])
-async def buy_stock(interaction: discord.Interaction, 종목: str, 수량: int):
-    if 수량 <= 0:
-        await interaction.response.send_message("❌ 1주 이상 입력해주세요.", ephemeral=True)
-        return
-
-    data = load_data()
-    u = get_user_data(data, interaction.user.id)
-    st_data = data["market"]["stocks"][종목]
-    price = st_data["price"] if isinstance(st_data, dict) else st_data
-    cost = price * 수량
-
-    if u["money"] < cost:
-        await interaction.response.send_message(f"❌ 소지금이 부족합니다. (필요 금액: {cost:,}원)", ephemeral=True)
-        return
-
-    u["money"] -= cost
-    u["stocks"][종목] += 수량
-    save_data(data)
-    await interaction.response.send_message(f"📈 [{종목}] {수량}주를 주당 {price:,}원 (총 {cost:,}원)에 매수했습니다!")
-
-# 12) /주식매도
-@bot.tree.command(name="주식매도", description="보유 주식을 매도하여 현금화합니다.")
-@app_commands.choices(종목=[
-    app_commands.Choice(name="170kg전자", value="170kg전자"),
-    app_commands.Choice(name="L을가져닉스", value="L을가져닉스"),
-    app_commands.Choice(name="엔비티키퐁크", value="엔비티키퐁크")
-])
-async def sell_stock(interaction: discord.Interaction, 종목: str, 수량: int):
-    if 수량 <= 0:
-        await interaction.response.send_message("❌ 1주 이상 입력해주세요.", ephemeral=True)
-        return
-
-    data = load_data()
-    u = get_user_data(data, interaction.user.id)
-
-    if u["stocks"].get(종목, 0) < 수량:
-        await interaction.response.send_message(f"❌ 소지한 [{종목}] 주식이 부족합니다.", ephemeral=True)
-        return
-
-    st_data = data["market"]["stocks"][종목]
-    price = st_data["price"] if isinstance(st_data, dict) else st_data
-    total = price * 수량
-
-    u["stocks"][종목] -= 수량
-    u["money"] += total
-    save_data(data)
-    await interaction.response.send_message(f"📉 [{종목}] {수량}주를 주당 {price:,}원 (총 {total:,}원)에 매도했습니다!")
-
-# 13) /강화
+# 10) /강화
 @bot.tree.command(name="강화", description="자동차 정비소를 열어 차를 연속으로 강화합니다.")
 async def upgrade(interaction: discord.Interaction):
     data = load_data()
@@ -1253,7 +1440,7 @@ async def upgrade(interaction: discord.Interaction):
     view = UpgradeView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 14) /순위
+# 11) /순위
 @bot.tree.command(name="순위", description="부자 및 소유 차 랭킹을 확인합니다.")
 @app_commands.choices(종류=[
     app_commands.Choice(name="💰 부자 랭킹", value="부자"),
@@ -1293,7 +1480,7 @@ async def ranking(interaction: discord.Interaction, 종류: str):
 
     await interaction.response.send_message(embed=embed)
 
-# 15) /주사위대결
+# 12) /주사위대결
 @bot.tree.command(name="주사위대결", description="다른 유저와 돈을 걸고 1v1 주사위 대결을 신청합니다. (3분 제한)")
 async def dice_duel(interaction: discord.Interaction, 베팅금: int):
     if 베팅금 < 1000:
@@ -1315,7 +1502,7 @@ async def dice_duel(interaction: discord.Interaction, 베팅금: int):
     await interaction.response.send_message(embed=embed, view=view)
     view.message = await interaction.original_response()
 
-# 16) /경마개장
+# 13) /경마개장
 @bot.tree.command(name="경마개장", description="서버 유저들과 함께 즐기는 2~4인 실시간 경마장을 개장합니다.")
 async def open_horse_race(interaction: discord.Interaction, 판돈: int):
     if 판돈 < 1000:
@@ -1335,11 +1522,17 @@ async def open_horse_race(interaction: discord.Interaction, 판돈: int):
     view = HorseRaceView(interaction.user, 판돈)
     await interaction.response.send_message(embed=view.build_embed(), view=view)
 
-# 17) /낚시
+# 14) /낚시 (1분 쿨타임 + 5~12초 랜덤 입질 대기)
 @bot.tree.command(name="낚시", description="찌를 물에 던져 물고기나 보물상자를 낚습니다.")
 async def fishing(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
+
+    now = datetime.now().timestamp()
+    if now - u.get("last_fish_time", 0) < 60:
+        remain = int(60 - (now - u.get("last_fish_time", 0)))
+        await interaction.response.send_message(f"⏳ 낚싯대를 정비 중입니다! ({remain}초 후 다시 낚시 가능)", ephemeral=True)
+        return
 
     rod_id = u.get("equipped_rod", 0)
     rod_info = ROD_DATA[rod_id]
@@ -1350,10 +1543,13 @@ async def fishing(interaction: discord.Interaction):
         return
 
     u["fatigue"] -= fatigue_cost
+    u["last_fish_time"] = now
     save_data(data)
 
     await interaction.response.send_message(f"🎣 **[{rod_info['name']}]**(으)로 찌를 멀리 던졌습니다... (피로도 -{fatigue_cost})")
-    wait_sec = random.randint(2, 4)
+
+    # 5초 ~ 12초 정밀 랜덤 입질 대기
+    wait_sec = random.uniform(5.0, 12.0)
     await asyncio.sleep(wait_sec)
 
     target_time = datetime.now().timestamp()
@@ -1364,7 +1560,7 @@ async def fishing(interaction: discord.Interaction):
     await msg.edit(content="💥 **입질이 왔다! 3초 안에 아래 버튼을 누르세요!!**", view=view)
 
 # ---------------------------------------------------------
-# 8. 실행부
+# 9. 실행부
 # ---------------------------------------------------------
 if __name__ == "__main__":
     TOKEN = os.getenv("BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
