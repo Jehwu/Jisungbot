@@ -163,7 +163,8 @@ def get_car_name(level):
     return f"{CAR_NAMES[level]} [{level}강]"
 
 def get_upgrade_info(level):
-    gold_cost = (level + 1) * 20000
+    # 강화 비용 50% 절반 인하 적용
+    gold_cost = (level + 1) * 10000
     if level < 10: stone_cost = 0
     elif level < 15: stone_cost = level - 9
     elif level < 20: stone_cost = (level - 14) * 2 + 5
@@ -608,7 +609,7 @@ def build_bag_embed(user, u):
     embed.add_field(name="🛡️ 강화 재료", value="\n".join(materials) if materials else "없음", inline=False)
     return embed
 
-# 4) /강화 UI (가독성 개편)
+# 4) /강화 UI
 def build_upgrade_embed(user, u, last_result_msg=None):
     curr_lvl = u["car_level"]
 
@@ -709,7 +710,7 @@ class UpgradeView(discord.ui.View):
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="🛑 강화를 종료했습니다.", view=self)
 
-# 5) /주사위대결 UI
+# 5) /주사위대결 UI (1~6 범위 & 애니메이션 개편)
 class DiceDuelView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=180)
@@ -739,33 +740,58 @@ class DiceDuelView(discord.ui.View):
         data = load_data()
         challenger = get_user_data(data, interaction.user.id)
 
+        # 잔액 부족 검증
+        if challenger["money"] < self.bet_amount:
+            await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({self.bet_amount:,}원 필요)", ephemeral=True)
+            return
+
         challenger["money"] -= self.bet_amount
-        host_roll, challenger_roll = random.randint(1, 100), random.randint(1, 100)
+        save_data(data)
+
+        self.completed = True
+        for item in self.children: item.disabled = True
+
+        # 1) 굴리는 연출
+        embed = discord.Embed(title="🎲 1v1 주사위 대결", description="🎲 주사위를 굴리는 중입니다...", color=0x3498db)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+        await asyncio.sleep(1.5)
+        host_roll = random.randint(1, 6)
+        
+        # 2) 방장 주사위 선공개
+        embed.description = f"👑 **{self.host_user.display_name}**: 🎲 **[{host_roll}]**\n⚔️ **{interaction.user.display_name}**: 🎲 굴리는 중..."
+        await interaction.message.edit(embed=embed)
+
+        await asyncio.sleep(1.5)
+        challenger_roll = random.randint(1, 6)
+
+        # 3) 도전 주사위 공개 및 승부 정산
         host_data = get_user_data(data, self.host_user.id)
         total_pot = self.bet_amount * 2
 
         if host_roll > challenger_roll:
             host_data["money"] += total_pot
-            result_str = f"🎉 **{self.host_user.mention} 승리!** (+{total_pot:,}원)"
+            res_str = f"🎉 **{self.host_user.mention} 승리!** (+{total_pot:,}원)"
+            color = 0x2ecc71
         elif challenger_roll > host_roll:
             challenger["money"] += total_pot
-            result_str = f"🎉 **{interaction.user.mention} 승리!** (+{total_pot:,}원)"
+            res_str = f"🎉 **{interaction.user.mention} 승리!** (+{total_pot:,}원)"
+            color = 0x2ecc71
         else:
             host_data["money"] += self.bet_amount
             challenger["money"] += self.bet_amount
-            result_str = "🤝 **무승부!** (베팅금 환불)"
+            res_str = "🤝 **무승부!** (베팅금 100% 환불)"
+            color = 0x95a5a6
 
-        self.completed = True
         save_data(data)
 
-        for item in self.children: item.disabled = True
-        embed = discord.Embed(title="🎲 1v1 주사위 결과", color=0x2ecc71)
-        embed.add_field(name=f"👑 {self.host_user.display_name}", value=f"🎲 **{host_roll}**", inline=True)
-        embed.add_field(name=f"⚔️ {interaction.user.display_name}", value=f"🎲 **{challenger_roll}**", inline=True)
-        embed.add_field(name="🏆 결과", value=result_str, inline=False)
-        await interaction.response.edit_message(embed=embed, view=self)
+        final_embed = discord.Embed(title="🎲 1v1 주사위 결과", color=color)
+        final_embed.add_field(name=f"👑 {self.host_user.display_name}", value=f"🎲 **[{host_roll}]**", inline=True)
+        final_embed.add_field(name=f"⚔️ {interaction.user.display_name}", value=f"🎲 **[{challenger_roll}]**", inline=True)
+        final_embed.add_field(name="🏆 결과", value=res_str, inline=False)
+        await interaction.message.edit(embed=final_embed)
 
-# 6) /가위바위보 UI (비공개 1v1 내기)
+# 6) /가위바위보 UI (이모티콘 적용 & 개편)
 class RPSPlayView(discord.ui.View):
     def __init__(self, host_user, challenger_user, bet_amount):
         super().__init__(timeout=120)
@@ -776,23 +802,23 @@ class RPSPlayView(discord.ui.View):
 
     @discord.ui.button(label="✌️ 가위", style=discord.ButtonStyle.primary)
     async def sci(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_choice(interaction, "가위")
+        await self.process_choice(interaction, "✌️")
 
     @discord.ui.button(label="✊ 바위", style=discord.ButtonStyle.primary)
     async def rock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_choice(interaction, "바위")
+        await self.process_choice(interaction, "✊")
 
     @discord.ui.button(label="🖐️ 보", style=discord.ButtonStyle.primary)
     async def paper(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_choice(interaction, "보")
+        await self.process_choice(interaction, "🖐️")
 
     async def process_choice(self, interaction: discord.Interaction, choice: str):
         if interaction.user.id not in [self.host_user.id, self.challenger_user.id]:
-            await interaction.response.send_message("❌ 진행 중인 당사자만 선택할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 당사자만 선택할 수 있습니다.", ephemeral=True)
             return
 
         self.choices[interaction.user.id] = choice
-        await interaction.response.send_message(f"✅ **[{choice}]**(을)를 비공개로 제출했습니다!", ephemeral=True)
+        await interaction.response.send_message(f"✅ **{choice}** 제출 완료!", ephemeral=True)
 
         if len(self.choices) == 2:
             for item in self.children: item.disabled = True
@@ -805,7 +831,7 @@ class RPSPlayView(discord.ui.View):
             h_data = get_user_data(data, self.host_user.id)
             c_data = get_user_data(data, self.challenger_user.id)
 
-            rules = {"가위": "보", "바위": "가위", "보": "바위"}
+            rules = {"✌️": "🖐️", "✊": "✌️", "🖐️": "✊"}
 
             if h_choice == c_choice:
                 h_data["money"] += self.bet_amount
@@ -814,19 +840,19 @@ class RPSPlayView(discord.ui.View):
                 color = 0x95a5a6
             elif rules[h_choice] == c_choice:
                 h_data["money"] += total_pot
-                res_str = f"🎉 **{self.host_user.mention} 승리!** (+{total_pot:,}원 독식)"
+                res_str = f"🎉 **{self.host_user.mention} 승리!** (+{total_pot:,}원)"
                 color = 0x2ecc71
             else:
                 c_data["money"] += total_pot
-                res_str = f"🎉 **{self.challenger_user.mention} 승리!** (+{total_pot:,}원 독식)"
+                res_str = f"🎉 **{self.challenger_user.mention} 승리!** (+{total_pot:,}원)"
                 color = 0x2ecc71
 
             save_data(data)
 
-            embed = discord.Embed(title="⚔️ 가위바위보 대결 결과", color=color)
-            embed.add_field(name=f"👑 {self.host_user.display_name}", value=f"내민 것: **{h_choice}**", inline=True)
-            embed.add_field(name=f"⚔️ {self.challenger_user.display_name}", value=f"내민 것: **{c_choice}**", inline=True)
-            embed.add_field(name="🏆 승부 결과", value=res_str, inline=False)
+            embed = discord.Embed(title="⚔️ 가위바위보 승부 결과", color=color)
+            embed.add_field(name=f"👑 {self.host_user.display_name}", value=h_choice, inline=True)
+            embed.add_field(name=f"⚔️ {self.challenger_user.display_name}", value=c_choice, inline=True)
+            embed.add_field(name="🏆 결과", value=res_str, inline=False)
             await interaction.message.edit(content=None, embed=embed, view=self)
 
 class RPSLobbyView(discord.ui.View):
@@ -838,23 +864,29 @@ class RPSLobbyView(discord.ui.View):
     @discord.ui.button(label="⚔️ 참가하기", style=discord.ButtonStyle.green)
     async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id == self.host_user.id:
-            await interaction.response.send_message("❌ 자신이 연 방에는 참가할 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 본인 방에는 참가할 수 없습니다.", ephemeral=True)
             return
 
         data = load_data()
         c_data = get_user_data(data, interaction.user.id)
+
+        # 참가자 돈 확인
+        if c_data["money"] < self.bet_amount:
+            await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({self.bet_amount:,}원 필요)", ephemeral=True)
+            return
+
         c_data["money"] -= self.bet_amount
         save_data(data)
 
         play_view = RPSPlayView(self.host_user, interaction.user, self.bet_amount)
         embed = discord.Embed(
-            title="⚔️ 1v1 가위바위보 승부 진행 중!",
-            description=f"**{self.host_user.display_name}** VS **{interaction.user.display_name}**\n판돈: **{self.bet_amount * 2:,}원**\n\n두 분은 아래 버튼 중 하나를 비공개로 누르세요!",
+            title="⚔️ 1v1 가위바위보 대결 진행 중",
+            description=f"**{self.host_user.display_name}** VS **{interaction.user.display_name}**\n판돈: **{self.bet_amount * 2:,}원**\n\n아래 버튼을 눌러 비공개로 선택하세요!",
             color=0xe67e22
         )
         await interaction.response.edit_message(embed=embed, view=play_view)
 
-# 7) /경마개장 UI (줄바꿈 깨짐 완전 방지 UI)
+# 7) /경마개장 UI
 class HorseRaceView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=300)
@@ -884,6 +916,9 @@ class HorseRaceView(discord.ui.View):
         u = get_user_data(data, interaction.user.id)
 
         if interaction.user.id != self.host_user.id:
+            if u["money"] < self.bet_amount:
+                await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({self.bet_amount:,}원 필요)", ephemeral=True)
+                return
             u["money"] -= self.bet_amount
             save_data(data)
 
@@ -919,7 +954,6 @@ class HorseRaceView(discord.ui.View):
         total_pot = len(self.participants) * self.bet_amount
         winner_num = None
 
-        # 트랙 위 유저 닉네임 제거로 줄바꿈 완벽 방지
         legend_str = " | ".join([f"**{num}번**: {user.display_name}" for num, user in self.participants.items()])
 
         while not winner_num:
@@ -1165,6 +1199,10 @@ async def transfer(interaction: discord.Interaction, 받으실분: discord.Membe
         await interaction.response.send_message("❌ 오늘 일일 송금 횟수(3회)를 모두 사용하셨습니다.", ephemeral=True)
         return
 
+    if sender["money"] < 금액:
+        await interaction.response.send_message("❌ 잔액이 부족합니다.", ephemeral=True)
+        return
+
     sender["money"] -= 금액
     receiver["money"] += 금액
     sender["remittance_count_today"] += 1
@@ -1331,20 +1369,7 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
     embed.set_thumbnail(url=get_img_url(shop_img_map.get(품목, "상점_강화석.png")))
     await interaction.response.send_message(embed=embed)
 
-# 9) /도박
-GAMBLE_IMG_MAP = {
-    "엔더드래곤": "마크_엔더드래곤.png", "네더라이트": "마크_네더라이트.png", "다이아몬드": "마크_다이아.png",
-    "철 발견": "마크_철.png", "평화로운 하루": "마크_평화.png", "크리퍼 폭발": "마크_크리퍼.png",
-    "용암 사망": "마크_용암.png", "엄크": "마크_엄크.png",
-    "챌린저": "롤_챌린저.png", "그랜드마스터": "롤_그랜드마스터.png", "마스터": "롤_마스터.png",
-    "다이아몬드": "롤_다이아.png", "에메랄드": "롤_에메랄드.png", "플래티넘": "롤_플래티넘.png",
-    "골드": "롤_골드.png", "실버": "롤_실버.png", "브론즈": "롤_브론즈.png", "아이언": "롤_아이언.png",
-    "레디언트": "발로란트_레디언트.png", "불멸": "발로란트_불멸.png", "초월자": "발로란트_초월자.png",
-    "L을 가져가~": "권루트_L을가져가.png", "측면 대 측면": "권루트_측면대측면.png", "셀카": "권루트_셀카.png",
-    "팁 토": "권루트_팁토.png", "기분에 따라": "권루트_기분에따라.png", "라운드 앤 라운드": "권루트_라운드앤라운드.png",
-    "애를 가져가~": "권루트_애를가져가.png", "스텝 댄싱": "권루트_스텝댄싱.png", "포탈 오류": "권루트_포탈오류.png"
-}
-
+# 9) /도박 (정밀 수학 공식 및 로딩 멘트 분기 버그 수정)
 @bot.tree.command(name="도박", description="게임 컨셉의 도박을 진행합니다. (마이너스 손실 가능)")
 @app_commands.choices(종류=[
     app_commands.Choice(name="⛏️ 마인크래프트 (초안전형)", value="마크"),
@@ -1360,84 +1385,100 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
 
+    # 1) 잔액 사전 검증
+    if u["money"] < 베팅금:
+        await interaction.response.send_message(f"❌ 현금이 부족합니다! (필요: {베팅금:,}원 / 보유: {u['money']:,}원)", ephemeral=True)
+        return
+
+    # 베팅금 선차감
+    u["money"] -= 베팅금
+
     await interaction.response.defer()
-    loading_embed = discord.Embed(title="🎰 도박 진행 중...", description="결과를 정산하고 있습니다...", color=0x95a5a6)
+    
+    # 2) 종목별 전용 로딩 멘트 복원
+    if 종류 == "마크": load_desc = "⛏️ 깊은 굴을 파고 들어가는 중..."
+    elif 종류 == "롤": load_desc = "⚔️ 소환사의 협곡에 입장하는 중..."
+    elif 종류 == "발로란트": load_desc = "🔫 에임 조준하는 중..."
+    elif 종류 == "권루트": load_desc = "🕺 권루트 댄스를 시전하는 중..."
+
+    loading_embed = discord.Embed(title="🎰 도박 진행 중...", description=load_desc, color=0x95a5a6)
     loading_embed.set_thumbnail(url=get_img_url(f"도박_{종류}.png"))
 
     msg = await interaction.followup.send(embed=loading_embed)
     await asyncio.sleep(1.5)
 
     rand = random.random() * 100
-    mult, result_title, embed_color = 0, "", 0x2ecc71
+    mult, result_title, embed_color, img_file = 0, "", 0x2ecc71, "도박_마크.png"
 
     if 종류 == "마크":
-        if rand < 0.2: mult, result_title, embed_color = 30, "🔹 엔더드래곤", 0xf1c40f
-        elif rand < 4.2: mult, result_title, embed_color = 5, "🔹 네더라이트", 0x9b59b6
-        elif rand < 14.2: mult, result_title, embed_color = 2, "🔹 다이아몬드", 0x3498db
-        elif rand < 43.0: mult, result_title, embed_color = 1, "🔹 철 발견", 0x2ecc71
-        elif rand < 55.0: mult, result_title, embed_color = 0, "⬛ 평화로운 하루", 0x95a5a6
-        elif rand < 84.0: mult, result_title, embed_color = -1, "🔸 크리퍼 폭발", 0xe74c3c
-        elif rand < 95.0: mult, result_title, embed_color = -2, "🔸 용암 사망", 0xe74c3c
-        else: mult, result_title, embed_color = -5, "🔸 정전 / 엄크", 0x2c3e50
+        if rand < 0.2: mult, result_title, embed_color, img_file = 30, "🔹 엔더드래곤", 0xf1c40f, "마크_엔더드래곤.png"
+        elif rand < 4.2: mult, result_title, embed_color, img_file = 5, "🔹 네더라이트", 0x9b59b6, "마크_네더라이트.png"
+        elif rand < 14.2: mult, result_title, embed_color, img_file = 2, "🔹 다이아몬드", 0x3498db, "마크_다이아.png"
+        elif rand < 43.0: mult, result_title, embed_color, img_file = 1, "🔹 철 발견", 0x2ecc71, "마크_철.png"
+        elif rand < 55.0: mult, result_title, embed_color, img_file = 0, "⬛ 평화로운 하루", 0x95a5a6, "마크_평화.png"
+        elif rand < 84.0: mult, result_title, embed_color, img_file = -1, "🔸 크리퍼 폭발", 0xe74c3c, "마크_크리퍼.png"
+        elif rand < 95.0: mult, result_title, embed_color, img_file = -2, "🔸 용암 사망", 0xe74c3c, "마크_용암.png"
+        else: mult, result_title, embed_color, img_file = -5, "🔸 정전 / 엄크", 0x2c3e50, "마크_엄크.png"
 
     elif 종류 == "롤":
-        if rand < 0.02: mult, result_title, embed_color = 100, "🔹 챌린저", 0xf1c40f
-        elif rand < 0.06: mult, result_title, embed_color = 50, "🔹 그랜드마스터", 0xf1c40f
-        elif rand < 0.40: mult, result_title, embed_color = 20, "🔹 마스터", 0x9b59b6
-        elif rand < 3.00: mult, result_title, embed_color = 5, "🔹 다이아몬드", 0x3498db
-        elif rand < 8.00: mult, result_title, embed_color = 3, "🔹 에메랄드", 0x2ecc71
-        elif rand < 17.5: mult, result_title, embed_color = 2, "🔹 플래티넘", 0x2ecc71
-        elif rand < 45.5: mult, result_title, embed_color = 1, "🔹 골드", 0x2ecc71
-        elif rand < 75.5: mult, result_title, embed_color = -1, "🔸 실버", 0xe74c3c
-        elif rand < 95.5: mult, result_title, embed_color = -2, "🔸 브론즈", 0xe74c3c
-        else: mult, result_title, embed_color = -5, "🔸 아이언", 0x2c3e50
+        if rand < 0.02: mult, result_title, embed_color, img_file = 100, "🔹 챌린저", 0xf1c40f, "롤_챌린저.png"
+        elif rand < 0.06: mult, result_title, embed_color, img_file = 50, "🔹 그랜드마스터", 0xf1c40f, "롤_그랜드마스터.png"
+        elif rand < 0.40: mult, result_title, embed_color, img_file = 20, "🔹 마스터", 0x9b59b6, "롤_마스터.png"
+        elif rand < 3.00: mult, result_title, embed_color, img_file = 5, "🔹 다이아몬드", 0x3498db, "롤_다이아.png"
+        elif rand < 8.00: mult, result_title, embed_color, img_file = 3, "🔹 에메랄드", 0x2ecc71, "롤_에메랄드.png"
+        elif rand < 17.5: mult, result_title, embed_color, img_file = 2, "🔹 플래티넘", 0x2ecc71, "롤_플래티넘.png"
+        elif rand < 45.5: mult, result_title, embed_color, img_file = 1, "🔹 골드", 0x2ecc71, "롤_골드.png"
+        elif rand < 75.5: mult, result_title, embed_color, img_file = -1, "🔸 실버", 0xe74c3c, "롤_실버.png"
+        elif rand < 95.5: mult, result_title, embed_color, img_file = -2, "🔸 브론즈", 0xe74c3c, "롤_브론즈.png"
+        else: mult, result_title, embed_color, img_file = -5, "🔸 아이언", 0x2c3e50, "롤_아이언.png"
 
     elif 종류 == "발로란트":
-        if rand < 0.02: mult, result_title, embed_color = 100, "🔹 레디언트", 0xf1c40f
-        elif rand < 0.06: mult, result_title, embed_color = 50, "🔹 불멸", 0xf1c40f
-        elif rand < 0.40: mult, result_title, embed_color = 20, "🔹 초월자", 0x9b59b6
-        elif rand < 4.00: mult, result_title, embed_color = 5, "🔹 다이아몬드", 0x3498db
-        elif rand < 13.5: mult, result_title, embed_color = 2, "🔹 플래티넘", 0x2ecc71
-        elif rand < 45.5: mult, result_title, embed_color = 1, "🔹 골드", 0x2ecc71
-        elif rand < 75.5: mult, result_title, embed_color = -1, "🔸 실버", 0xe74c3c
-        elif rand < 95.5: mult, result_title, embed_color = -2, "🔸 브론즈", 0xe74c3c
-        else: mult, result_title, embed_color = -5, "🔸 아이언", 0x2c3e50
+        if rand < 0.02: mult, result_title, embed_color, img_file = 100, "🔹 레디언트", 0xf1c40f, "발로란트_레디언트.png"
+        elif rand < 0.06: mult, result_title, embed_color, img_file = 50, "🔹 불멸", 0xf1c40f, "발로란트_불멸.png"
+        elif rand < 0.40: mult, result_title, embed_color, img_file = 20, "🔹 초월자", 0x9b59b6, "발로란트_초월자.png"
+        elif rand < 4.00: mult, result_title, embed_color, img_file = 5, "🔹 다이아몬드", 0x3498db, "롤_다이아.png"
+        elif rand < 13.5: mult, result_title, embed_color, img_file = 2, "🔹 플래티넘", 0x2ecc71, "롤_플래티넘.png"
+        elif rand < 45.5: mult, result_title, embed_color, img_file = 1, "🔹 골드", 0x2ecc71, "롤_골드.png"
+        elif rand < 75.5: mult, result_title, embed_color, img_file = -1, "🔸 실버", 0xe74c3c, "롤_실버.png"
+        elif rand < 95.5: mult, result_title, embed_color, img_file = -2, "🔸 브론즈", 0xe74c3c, "롤_브론즈.png"
+        else: mult, result_title, embed_color, img_file = -5, "🔸 아이언", 0x2c3e50, "롤_아이언.png"
 
     elif 종류 == "권루트":
-        if rand < 0.01: mult, result_title, embed_color = 200, "🔹 L을 가져가~", 0xf1c40f
-        elif rand < 0.04: mult, result_title, embed_color = 80, "🔹 측면 대 측면", 0xf1c40f
-        elif rand < 0.30: mult, result_title, embed_color = 30, "🔹 셀카", 0x9b59b6
-        elif rand < 3.00: mult, result_title, embed_color = 10, "🔹 팁 토", 0x3498db
-        elif rand < 10.0: mult, result_title, embed_color = 3, "🔹 기분에 따라", 0x2ecc71
-        elif rand < 30.0: mult, result_title, embed_color = 1.5, "🔹 라운드 앤 라운드", 0x2ecc71
-        elif rand < 65.0: mult, result_title, embed_color = -1, "🔸 애를 가져가~", 0xe74c3c
-        elif rand < 90.0: mult, result_title, embed_color = -3, "🔸 스텝 댄싱", 0xe74c3c
-        else: mult, result_title, embed_color = -10, "💥 포탈 오류 (전재산 파산)", 0x2c3e50
+        if rand < 0.01: mult, result_title, embed_color, img_file = 200, "🔹 L을 가져가~", 0xf1c40f, "권루트_L을가져가.png"
+        elif rand < 0.04: mult, result_title, embed_color, img_file = 80, "🔹 측면 대 측면", 0xf1c40f, "권루트_측면대측면.png"
+        elif rand < 0.30: mult, result_title, embed_color, img_file = 30, "🔹 셀카", 0x9b59b6, "권루트_셀카.png"
+        elif rand < 3.00: mult, result_title, embed_color, img_file = 10, "🔹 팁 토", 0x3498db, "권루트_팁토.png"
+        elif rand < 10.0: mult, result_title, embed_color, img_file = 3, "🔹 기분에 따라", 0x2ecc71, "권루트_기분에따라.png"
+        elif rand < 30.0: mult, result_title, embed_color, img_file = 1.5, "🔹 라운드 앤 라운드", 0x2ecc71, "권루트_라운드앤라운드.png"
+        elif rand < 65.0: mult, result_title, embed_color, img_file = -1, "🔸 애를 가져가~", 0xe74c3c, "권루트_애를가져가.png"
+        elif rand < 90.0: mult, result_title, embed_color, img_file = -3, "🔸 스텝 댄싱", 0xe74c3c, "권루트_스텝댄싱.png"
+        else: mult, result_title, embed_color, img_file = -10, "💥 포탈 오류 (전재산 파산)", 0x2c3e50, "권루트_포탈오류.png"
 
-    change_amount = int(베팅금 * abs(mult)) if mult < 0 else int(베팅금 * mult)
-
-    if mult >= 0:
-        u["money"] += change_amount
-        res_str = f"🎉 **+{change_amount:,}원** 이득!"
-    else:
-        u["money"] -= change_amount # 마이너스 통장 허용
-        res_str = f"💥 **-{change_amount:,}원** 손실..."
+    # 3) 정확한 당첨금 및 손익 계산
+    if mult > 0:
+        payout = int(베팅금 * mult)
+        u["money"] += payout
+        net = payout - 베팅금
+        if net > 0: res_str = f"🎉 **+{net:,}원** 이득! (당첨금: {payout:,}원)"
+        elif net == 0: res_str = "⬛ **손익 없음** (원금 보존)"
+        else: res_str = f"💥 **-{abs(net):,}원** 손실..."
+    elif mult == 0:
+        res_str = f"💥 **-{베팅금:,}원** 손실..."
+    else: # mult < 0 페널티
+        extra_loss = int(베팅금 * (abs(mult) - 1))
+        u["money"] -= extra_loss
+        total_loss = 베팅금 + extra_loss
+        res_str = f"💥 **-{total_loss:,}원** 손실..."
 
     save_data(data)
+
     res_embed = discord.Embed(title=f"🎰 {종류} 도박 결과", description=f"결과: **{result_title}**", color=embed_color)
-
-    res_img = f"도박_{종류}.png"
-    for k, v in GAMBLE_IMG_MAP.items():
-        if k in result_title:
-            res_img = v
-            break
-
-    res_embed.set_thumbnail(url=get_img_url(res_img))
-    res_embed.add_field(name="변동 금액", value=res_str, inline=False)
+    res_embed.set_thumbnail(url=get_img_url(img_file))
+    res_embed.add_field(name="정산 내역", value=res_str, inline=False)
     res_embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
     await msg.edit(embed=res_embed)
 
-# 10) /도박확률 (신설)
+# 10) /도박확률
 @bot.tree.command(name="도박확률", description="도박 종류별 당첨 확률과 배율 안내표를 확인합니다.")
 async def gamble_rates(interaction: discord.Interaction):
     embed = discord.Embed(title="📊 도박 종류별 확률 & 배율표", color=0x3498db)
@@ -1536,15 +1577,19 @@ async def dice_duel(interaction: discord.Interaction, 베팅금: int):
     data = load_data()
     host = get_user_data(data, interaction.user.id)
 
+    if host["money"] < 베팅금:
+        await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({베팅금:,}원 필요)", ephemeral=True)
+        return
+
     host["money"] -= 베팅금
     save_data(data)
 
-    embed = discord.Embed(title="🎲 1v1 주사위 대결 (3분 제한)", description=f"**{interaction.user.display_name}**님이 **{베팅금:,}원** 대결을 생성했습니다!", color=0x3498db)
+    embed = discord.Embed(title="🎲 1v1 주사위 대결", description=f"**{interaction.user.display_name}**님이 **{베팅금:,}원** 대결을 열었습니다!", color=0x3498db)
     view = DiceDuelView(interaction.user, 베팅금)
     await interaction.response.send_message(embed=embed, view=view)
     view.message = await interaction.original_response()
 
-# 14) /가위바위보 (신설)
+# 14) /가위바위보
 @bot.tree.command(name="가위바위보", description="비공개 선택 방식의 1v1 가위바위보 심리전 대결을 엽니다.")
 async def rps_game(interaction: discord.Interaction, 판돈: int):
     if 판돈 < 1000:
@@ -1554,10 +1599,14 @@ async def rps_game(interaction: discord.Interaction, 판돈: int):
     data = load_data()
     host = get_user_data(data, interaction.user.id)
 
+    if host["money"] < 판돈:
+        await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({판돈:,}원 필요)", ephemeral=True)
+        return
+
     host["money"] -= 판돈
     save_data(data)
 
-    embed = discord.Embed(title="⚔️ 1v1 가위바위보 대결 대기실", description=f"**{interaction.user.display_name}**님이 **{판돈:,}원** 판돈의 가위바위보 대결을 엽니다!", color=0xe67e22)
+    embed = discord.Embed(title="⚔️ 1v1 가위바위보 대결", description=f"**{interaction.user.display_name}**님이 **{판돈:,}원** 대결을 열었습니다!", color=0xe67e22)
     view = RPSLobbyView(interaction.user, 판돈)
     await interaction.response.send_message(embed=embed, view=view)
 
@@ -1571,13 +1620,17 @@ async def open_horse_race(interaction: discord.Interaction, 판돈: int):
     data = load_data()
     host = get_user_data(data, interaction.user.id)
 
+    if host["money"] < 판돈:
+        await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({판돈:,}원 필요)", ephemeral=True)
+        return
+
     host["money"] -= 판돈
     save_data(data)
 
     view = HorseRaceView(interaction.user, 판돈)
     await interaction.response.send_message(embed=view.build_embed(), view=view)
 
-# 16) /파산신청 (신설 - 빚 탕감 룰렛)
+# 16) /파산신청
 @bot.tree.command(name="파산신청", description="잔액이 마이너스(빚)일 때 하루 1회 채무 감면 룰렛을 진행합니다.")
 async def bankruptcy_relief(interaction: discord.Interaction):
     data = load_data()
@@ -1591,25 +1644,22 @@ async def bankruptcy_relief(interaction: discord.Interaction):
     today_str = now_kst.strftime("%Y-%m-%d")
 
     if u.get("last_bankrupt_date", "") == today_str:
-        await interaction.response.send_message("❌ 파산신청은 하루에 한 번만 가능합니다. (내일 다시 시도하세요)", ephemeral=True)
+        await interaction.response.send_message("❌ 파산신청은 하루에 한 번만 가능합니다.", ephemeral=True)
         return
 
     debt = abs(u["money"])
     rand = random.random() * 100
 
     if rand < 15:
-        # 100% 전액 탕감 (15%)
         u["money"] = 0
-        res_str = f"🎉 **[100% 전액 면제!!]** 법원에서 빚 **{debt:,}원**을 전액 탕감해 주었습니다!"
+        res_str = f"🎉 **[100% 전액 면제!!]** 빚 **{debt:,}원**을 전액 탕감받았습니다!"
         color = 0xf1c40f
     elif rand < 50:
-        # 70% 감면 (35%)
         reduced = int(debt * 0.7)
         u["money"] = int(u["money"] * 0.3)
         res_str = f"✨ **[70% 대폭 감면!]** 빚 중 **{reduced:,}원**이 탕감되어 남은 빚은 **{abs(u['money']):,}원**입니다."
         color = 0x3498db
     else:
-        # 50% 감면 (50%)
         reduced = int(debt * 0.5)
         u["money"] = int(u["money"] * 0.5)
         res_str = f"👍 **[50% 절반 감면!]** 빚 중 **{reduced:,}원**이 탕감되어 남은 빚은 **{abs(u['money']):,}원**입니다."
