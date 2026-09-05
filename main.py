@@ -25,8 +25,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DATA_FILE = "bot_data.json"
 
 # ⚠️ [필수 수정] 본인의 깃허브 아이디와 저장소(Repository) 이름으로 입력해주세요!
-GITHUB_USERNAME = "본인_깃허브_아이디"
-GITHUB_REPO = "저장소_이름"
+GITHUB_USERNAME = "Jehwu"
+GITHUB_REPO = "Jisungbot"
 GITHUB_IMG_BASE = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/images"
 
 def get_img_url(file_name):
