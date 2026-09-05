@@ -102,19 +102,23 @@ def get_user_data(data, user_id):
                 "강화석": 0, "파괴 방지권": 0, "하락 방지권": 0
             },
             "stocks": {"170kg전자": 0, "L을가져닉스": 0, "엔비티키퐁크": 0},
-            "car_level": 0
+            "car_level": 0,
+            "owned_rods": [0],     # 소유한 낚싯대 ID 목록
+            "equipped_rod": 0      # 장착 중인 낚싯대 ID
         }
     else:
         u = data["users"][uid]
         u.setdefault("remittance_count_today", 0)
         u.setdefault("last_check_date", "")
         u.setdefault("attendance_streak", 0)
+        u.setdefault("owned_rods", [0])
+        u.setdefault("equipped_rod", 0)
         if "car_level" not in u:
             u["car_level"] = u.pop("weapon_level", 0)
     return data["users"][uid]
 
 # ---------------------------------------------------------
-# 3. 차(Car) 강화 명칭 및 필요 수치 계산기
+# 3. 차(Car) & 낚싯대 스펙 데이터
 # ---------------------------------------------------------
 CAR_NAMES = [
     "뚜벅이 (맨발)", "현대 아반떼", "기아 K5", "현대 그랜저", "제네시스 G80", "제네시스 G90",
@@ -126,6 +130,15 @@ CAR_NAMES = [
     "부가티 볼리드", "부가티 라 부아튀르 누아르"
 ]
 
+ROD_DATA = {
+    # rates: (쓰레기, 일반, 희귀, 전설, 보물상자) %
+    0: {"name": "맨손", "price": 0, "fatigue": 5, "rates": (20.0, 60.0, 16.0, 3.0, 1.0)},
+    1: {"name": "대나무 낚싯대", "price": 30000, "fatigue": 7, "rates": (18.0, 58.0, 19.0, 3.5, 1.5)},
+    2: {"name": "카본 낚싯대", "price": 150000, "fatigue": 9, "rates": (15.0, 55.0, 23.0, 4.5, 2.5)},
+    3: {"name": "티타늄 낚싯대", "price": 500000, "fatigue": 12, "rates": (12.0, 51.0, 28.0, 6.0, 3.0)},
+    4: {"name": "✨ 트라이아나", "price": 2000000, "fatigue": 15, "rates": (8.0, 46.0, 35.0, 7.0, 4.0)}
+}
+
 def get_car_name(level):
     if level <= 0: return "뚜벅이 (맨발)"
     if level >= 31: return "✨ 부가티 라 부아튀르 누아르 [30(+1)강]"
@@ -134,17 +147,11 @@ def get_car_name(level):
 
 def get_upgrade_info(level):
     gold_cost = (level + 1) * 20000
-
-    if level < 10:
-        stone_cost = 0
-    elif level < 15:
-        stone_cost = level - 9
-    elif level < 20:
-        stone_cost = (level - 14) * 2 + 5
-    elif level < 25:
-        stone_cost = (level - 19) * 5 + 15
-    else:
-        stone_cost = (level - 24) * 10 + 40
+    if level < 10: stone_cost = 0
+    elif level < 15: stone_cost = level - 9
+    elif level < 20: stone_cost = (level - 14) * 2 + 5
+    elif level < 25: stone_cost = (level - 19) * 5 + 15
+    else: stone_cost = (level - 24) * 10 + 40
 
     if level < 5: success_rate, destroy_rate = 100 - (level * 5), 0
     elif level < 10: success_rate, destroy_rate = 70 - ((level - 5) * 5), 0
@@ -154,7 +161,6 @@ def get_upgrade_info(level):
     else: success_rate, destroy_rate = 3, 50
 
     degrade_rate = 100 - success_rate - destroy_rate if success_rate + destroy_rate < 100 else 0
-
     return gold_cost, stone_cost, success_rate, destroy_rate, degrade_rate
 
 # ---------------------------------------------------------
@@ -174,14 +180,9 @@ async def update_artifact_prices():
     for item, (base, min_p, max_p) in base_prices.items():
         curr_data = data["market"]["artifacts"].get(item, {"price": base, "prev_price": base})
         curr_price = curr_data["price"] if isinstance(curr_data, dict) else curr_data
-        
         rate = random.uniform(-0.30, 0.30)
         new_price = max(min_p, min(max_p, int(curr_price * (1 + rate))))
-        
-        data["market"]["artifacts"][item] = {
-            "price": new_price,
-            "prev_price": curr_price
-        }
+        data["market"]["artifacts"][item] = {"price": new_price, "prev_price": curr_price}
     save_data(data)
 
 stock_times = [time(hour=h, minute=0) for h in range(24)]
@@ -191,14 +192,9 @@ async def update_stock_prices():
     for stock in data["market"]["stocks"].keys():
         curr_data = data["market"]["stocks"][stock]
         curr_price = curr_data["price"] if isinstance(curr_data, dict) else curr_data
-        
         rate = random.uniform(-0.35, 0.35)
         new_price = max(10000, int(curr_price * (1 + rate)))
-        
-        data["market"]["stocks"][stock] = {
-            "price": new_price,
-            "prev_price": curr_price
-        }
+        data["market"]["stocks"][stock] = {"price": new_price, "prev_price": curr_price}
     save_data(data)
 
 @tasks.loop(time=time(hour=15, minute=0)) # KST 00시
@@ -212,10 +208,11 @@ async def daily_reset():
     save_data(data)
 
 # ---------------------------------------------------------
-# 5. UI 컴포넌트 (/가방 /강화 /주사위대결 /경마개장)
+# 5. UI 컴포넌트 (/가방 /강화 /주사위대결 /경마개장 /낚시)
 # ---------------------------------------------------------
 
-class BagSelect(discord.ui.Select):
+# 1) /가방 드롭다운 UI (소모품 사용 + 낚싯대 교체)
+class BagItemSelect(discord.ui.Select):
     def __init__(self, user_id):
         self.user_id = user_id
         options = [
@@ -223,7 +220,7 @@ class BagSelect(discord.ui.Select):
             discord.SelectOption(label="핫식스 박스", description="피로도 100 완충 (일일 1회)", emoji="⚡", value="핫식스 박스"),
             discord.SelectOption(label="유물 랜덤 상자", description="고대 유물 100% 획득", emoji="📦", value="유물 랜덤 상자")
         ]
-        super().__init__(placeholder="사용할 아이템을 선택하세요...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="🥤 사용할 아이템을 선택하세요...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -265,29 +262,62 @@ class BagSelect(discord.ui.Select):
             msg = f"📦 유물 랜덤 상자에서 【 {got} 】을(를) 발굴했습니다!"
 
         save_data(data)
-
         embed = build_bag_embed(interaction.user, u)
         await interaction.response.edit_message(embed=embed, view=self.view)
         await interaction.followup.send(msg, ephemeral=True)
 
+class BagRodSelect(discord.ui.Select):
+    def __init__(self, user_id, owned_rods):
+        self.user_id = user_id
+        options = []
+        for rod_id in owned_rods:
+            r_info = ROD_DATA[rod_id]
+            options.append(discord.SelectOption(
+                label=r_info["name"],
+                description=f"피로도 소모: {r_info['fatigue']}",
+                emoji="🎣",
+                value=str(rod_id)
+            ))
+        super().__init__(placeholder="🎣 장착할 낚싯대를 선택하세요...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인의 가방 메뉴만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        rod_id = int(self.values[0])
+        data = load_data()
+        u = get_user_data(data, interaction.user.id)
+        u["equipped_rod"] = rod_id
+        save_data(data)
+
+        embed = build_bag_embed(interaction.user, u)
+        await interaction.response.edit_message(embed=embed, view=self.view)
+        await interaction.followup.send(f"🎣 낚싯대를 **[{ROD_DATA[rod_id]['name']}]**(으)로 변경 장착했습니다!", ephemeral=True)
+
 class BagView(discord.ui.View):
-    def __init__(self, user_id):
+    def __init__(self, user_id, owned_rods):
         super().__init__(timeout=120)
-        self.add_item(BagSelect(user_id))
+        self.add_item(BagItemSelect(user_id))
+        self.add_item(BagRodSelect(user_id, owned_rods))
 
 def build_bag_embed(user, u):
-    embed = discord.Embed(title=f"🎒 {user.display_name}님의 가방 소지품", color=0x9b59b6)
+    embed = discord.Embed(title=f"🎒 {user.display_name}님의 가방 및 장비", color=0x9b59b6)
     embed.set_thumbnail(url=user.display_avatar.url)
+
+    eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
+    embed.add_field(name="🎣 현재 장착 낚싯대", value=f"**[{eq_rod_name}]** (피로도 {ROD_DATA[u.get('equipped_rod', 0)]['fatigue']} 소모)", inline=False)
 
     artifacts = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in DEFAULT_MARKET["artifacts"] and v > 0]
     consumables = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["에너지드링크", "핫식스 박스", "유물 랜덤 상자"] and v > 0]
     materials = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["강화석", "파괴 방지권", "하락 방지권"] and v > 0]
 
     embed.add_field(name="🏛️ 보유 유물", value="\n".join(artifacts) if artifacts else "없음", inline=False)
-    embed.add_field(name="🥤 소모성 아이템 (아래 메뉴로 사용)", value="\n".join(consumables) if consumables else "없음", inline=False)
-    embed.add_field(name="🛡️ 강화 재료 (강화 시 자동 적용)", value="\n".join(materials) if materials else "없음", inline=False)
+    embed.add_field(name="🥤 소모성 아이템", value="\n".join(consumables) if consumables else "없음", inline=False)
+    embed.add_field(name="🛡️ 강화 재료", value="\n".join(materials) if materials else "없음", inline=False)
     return embed
 
+# 2) /강화 UI
 def build_upgrade_embed(user, u, last_result_msg=None):
     curr_lvl = u["car_level"]
 
@@ -399,6 +429,7 @@ class UpgradeView(discord.ui.View):
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="🛑 차량 강화를 종료했습니다.", view=self)
 
+# 3) /주사위대결 UI
 class DiceDuelView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=180)
@@ -487,6 +518,7 @@ class DiceDuelView(discord.ui.View):
         embed = discord.Embed(title="🎲 주사위 대결 취소됨", description="방장에 의해 대결이 취소되고 베팅금이 환불되었습니다.", color=0x7f8c8d)
         await interaction.response.edit_message(embed=embed, view=self)
 
+# 4) /경마개장 UI
 class HorseRaceView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=300)
@@ -599,6 +631,74 @@ class HorseRaceView(discord.ui.View):
         embed = discord.Embed(title="🏇 경마 대회 취소됨", description="모든 참가자에게 베팅금이 환불되었습니다.", color=0x7f8c8d)
         await interaction.response.edit_message(embed=embed, view=self)
 
+# 5) /낚시 미니게임 UI
+class CatchFishButton(discord.ui.Button):
+    def __init__(self, user_id, target_time):
+        super().__init__(label="🎣 낚아채기!", style=discord.ButtonStyle.success)
+        self.user_id = user_id
+        self.target_time = target_time
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인의 찌만 건질 수 있습니다.", ephemeral=True)
+            return
+
+        now = datetime.now().timestamp()
+        if now > self.target_time + 3.5:
+            await interaction.response.edit_message(content="🐟 반응이 늦어 물고기가 떡밥만 먹고 도망쳤습니다...", view=None)
+            return
+
+        data = load_data()
+        u = get_user_data(data, interaction.user.id)
+        rod_id = u.get("equipped_rod", 0)
+
+        # rates: (쓰레기, 일반, 희귀, 전설, 보물상자) %
+        rates = ROD_DATA[rod_id]["rates"]
+        trash_r, norm_r, rare_r, leg_r, box_r = rates
+
+        rand = random.uniform(0, 100)
+
+        if rand < box_r:
+            # 🎁 침몰한 보물상자
+            box_rand = random.choice(["gold", "stone", "artifact"])
+            if box_rand == "gold":
+                g = random.randint(50000, 150000)
+                u["money"] += g
+                res_msg = f"🎁 **침몰한 보물상자**를 건졌습니다! (💰 **+{g:,}원** 획득)"
+            elif box_rand == "stone":
+                s = random.randint(3, 5)
+                u["inventory"]["강화석"] += s
+                res_msg = f"🎁 **침몰한 보물상자**를 건졌습니다! (✨ **강화석 {s}개** 획득)"
+            else:
+                arts = ["똥먹방 비법서", "차은우지성 조각상", "170KG 비법서", "곤지암병원 지도", "L을 가져가 비법서"]
+                art = random.choice(arts)
+                u["inventory"][art] += 1
+                res_msg = f"🎁 **침몰한 보물상자**를 건졌습니다! (🏛️ **【 {art} 】** 발굴)"
+        elif rand < (box_r + leg_r):
+            # 👑 전설 어종 (황금 잉어)
+            g = random.randint(50000, 80000)
+            u["money"] += g
+            res_msg = f"👑 **[전설] 황금 잉어**를 낚았습니다! (💰 **+{g:,}원** 매각)"
+        elif rand < (box_r + leg_r + rare_r):
+            # 🐠 희귀 어종
+            fish = random.choice(["참다랑어", "돗돔"])
+            g = random.randint(5000, 15000)
+            u["money"] += g
+            res_msg = f"🐠 **[희귀] {fish}**를 낚았습니다! (💰 **+{g:,}원** 매각)"
+        elif rand < (box_r + leg_r + rare_r + norm_r):
+            # 🐟 일반 어종
+            fish = random.choice(["붕어", "고등어", "광어"])
+            g = random.randint(500, 2000)
+            u["money"] += g
+            res_msg = f"🐟 **[일반] {fish}**를 낚았습니다! (💰 **+{g:,}원** 매각)"
+        else:
+            # 🗑️ 쓰레기
+            trash = random.choice(["찢어진 장화", "썩은 미역", "빈 깡통"])
+            res_msg = f"🗑️ **{trash}**을(를) 낚았습니다... (0원)"
+
+        save_data(data)
+        await interaction.response.edit_message(content=f"🎣 {res_msg}", view=None)
+
 # ---------------------------------------------------------
 # 6. 봇 동기화 이벤트
 # ---------------------------------------------------------
@@ -618,11 +718,11 @@ async def on_ready():
 # ---------------------------------------------------------
 
 # 1) /내정보
-@bot.tree.command(name="내정보", description="내 재산, 피로도, 차 정보 및 통계를 확인합니다.")
+@bot.tree.command(name="내정보", description="내 재산, 피로도, 차 및 장착 낚싯대 정보를 확인합니다.")
 async def my_info(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
-    
+
     total_wealth = u["money"]
     for art, count in u["inventory"].items():
         if art in data["market"]["artifacts"]:
@@ -637,24 +737,27 @@ async def my_info(interaction: discord.Interaction):
 
     embed = discord.Embed(title=f"👤 {interaction.user.display_name}님의 프로필 카드", color=0x3498db)
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    
+
+    eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
+
     embed.add_field(name="💳 현금 잔액", value=f"**{u['money']:,}원**", inline=True)
     embed.add_field(name="🏛️ 추산 총자산", value=f"**{total_wealth:,}원**", inline=True)
     embed.add_field(name="⚡ 피로도 게이지", value=get_fatigue_bar(u['fatigue']), inline=False)
     embed.add_field(name="🚘 소유 차", value=f"**{get_car_name(u['car_level'])}**", inline=True)
+    embed.add_field(name="🎣 장착 낚싯대", value=f"**{eq_rod_name}**", inline=True)
     embed.add_field(name="💃 춤 숙련도", value=f"**Lv.{u['dance_level']}** ({u['dance_count']}회)", inline=True)
     embed.add_field(name="📅 연속 출석", value=f"**{u['attendance_streak']}일째**", inline=True)
-    embed.set_footer(text="💡 소지품 확인 및 소모품 사용은 [/가방] 명령어를 이용하세요!")
-    
+    embed.set_footer(text="💡 소지품 확인 및 소모품 사용, 낚싯대 교체는 [/가방]을 이용하세요!")
+
     await interaction.response.send_message(embed=embed)
 
 # 2) /가방
-@bot.tree.command(name="가방", description="소지품을 확인하고 소모품을 바로 사용합니다.")
+@bot.tree.command(name="가방", description="소지품을 확인하고 소모품 사용 및 낚싯대를 변경합니다.")
 async def bag(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
     embed = build_bag_embed(interaction.user, u)
-    view = BagView(interaction.user.id)
+    view = BagView(interaction.user.id, u.get("owned_rods", [0]))
     await interaction.response.send_message(embed=embed, view=view)
 
 # 3) /출석체크
@@ -662,11 +765,11 @@ async def bag(interaction: discord.Interaction):
 async def attendance(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
-    
+
     now_kst = datetime.now(KST)
     today_str = now_kst.strftime("%Y-%m-%d")
     yesterday_str = (now_kst - timedelta(days=1)).strftime("%Y-%m-%d")
-    
+
     if u["last_check_date"] == today_str:
         await interaction.response.send_message("❌ 오늘은 이미 출석체크를 완료했습니다! (매일 밤 12시 초기화)", ephemeral=True)
         return
@@ -736,17 +839,17 @@ async def transfer(interaction: discord.Interaction, 받으실분: discord.Membe
 async def dance(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
-    
+
     cooldowns = [60, 50, 45, 40, 35, 30]
     fatigue_cost = 4 if u["dance_level"] >= 3 else 5
     cd = cooldowns[min(u["dance_level"], 5)]
-    
+
     now = datetime.now().timestamp()
     if now - u["last_dance_time"] < cd:
         remain = int(cd - (now - u["last_dance_time"]))
         await interaction.response.send_message(f"⏳ 지쳤습니다! {remain}초 후에 다시 춤출 수 있습니다.", ephemeral=True)
         return
-    
+
     if u["fatigue"] < fatigue_cost:
         await interaction.response.send_message("❌ 피로도가 부족합니다! (자정 회복 또는 상점 음료 필요)", ephemeral=True)
         return
@@ -754,7 +857,7 @@ async def dance(interaction: discord.Interaction):
     u["fatigue"] -= fatigue_cost
     u["last_dance_time"] = now
     u["dance_count"] += 1
-    
+
     reqs = [50, 150, 300, 500, 750]
     for i, req in enumerate(reqs):
         if u["dance_count"] >= req:
@@ -824,23 +927,23 @@ async def artifact_prices(interaction: discord.Interaction):
     market = data["market"]["artifacts"]
     now = datetime.now(KST)
     rem_min = 30 - (now.minute % 30)
-    
+
     embed = discord.Embed(title="🏛️ 유물 실시간 시세표 (30분 주기 변동)", color=0xf1c40f)
     embed.set_thumbnail(url=get_img_url("유물시세.png"))
-    
+
     lines = []
     for name, info in market.items():
         price = info["price"] if isinstance(info, dict) else info
         prev = info["prev_price"] if isinstance(info, dict) else price
         diff = price - prev
         rate = ((price - prev) / prev * 100) if prev > 0 else 0
-        
+
         if diff > 0: status = f"▲ +{diff:,}원 (+{rate:.1f}%)"
         elif diff < 0: status = f"▼ -{abs(diff):,}원 ({rate:.1f}%)"
         else: status = "➖ 0원 (0.0%)"
-        
+
         lines.append(f"• **{name}** | `{price:,}원` ({status})")
-        
+
     embed.description = "\n".join(lines)
     embed.set_footer(text=f"⏱️ 다음 시세 갱신까지: 약 {rem_min}분 남음")
     await interaction.response.send_message(embed=embed)
@@ -858,7 +961,7 @@ async def sell_artifact(interaction: discord.Interaction, 유물명: str, 개수
     if 개수 <= 0:
         await interaction.response.send_message("❌ 1개 이상 입력해주세요.", ephemeral=True)
         return
-    
+
     data = load_data()
     u = get_user_data(data, interaction.user.id)
     if u["inventory"].get(유물명, 0) < 개수:
@@ -870,23 +973,53 @@ async def sell_artifact(interaction: discord.Interaction, 유물명: str, 개수
     total = price * 개수
     u["inventory"][유물명] -= 개수
     u["money"] += total
-    
+
     save_data(data)
     await interaction.response.send_message(f"✅ [{유물명}] {개수}개를 개당 {price:,}원 (총 {total:,}원)에 매각했습니다!")
 
-# 8) /상점
-@bot.tree.command(name="상점", description="피로도 회복제, 유물 상자 및 강화 재료를 구매합니다.")
+# 8) /상점 (소모품 + 낚싯대 확장)
+@bot.tree.command(name="상점", description="회복제, 유물상자, 강화재료 및 낚싯대를 구매합니다.")
 @app_commands.choices(품목=[
     app_commands.Choice(name="🥤 에너지드링크 (+30 피로도) - 10,000원", value="에너지드링크"),
     app_commands.Choice(name="⚡ 핫식스 박스 (+100 피로도 완충) - 30,000원", value="핫식스 박스"),
     app_commands.Choice(name="📦 유물 랜덤 상자 - 80,000원", value="유물 랜덤 상자"),
     app_commands.Choice(name="✨ 강화석 팩 (10개) - 15,000원", value="강화석 팩"),
     app_commands.Choice(name="🛡️ 파괴 방지권 - 40,000원", value="파괴 방지권"),
-    app_commands.Choice(name="📉 하락 방지권 - 20,000원", value="하락 방지권")
+    app_commands.Choice(name="📉 하락 방지권 - 20,000원", value="하락 방지권"),
+    app_commands.Choice(name="🎣 대나무 낚싯대 (피로도 7 소모) - 30,000원", value="대나무 낚싯대"),
+    app_commands.Choice(name="🎣 카본 낚싯대 (피로도 9 소모) - 150,000원", value="카본 낚싯대"),
+    app_commands.Choice(name="🎣 티타늄 낚싯대 (피로도 12 소모) - 500,000원", value="티타늄 낚싯대"),
+    app_commands.Choice(name="✨ 트라이아나 (피로도 15 소모) - 2,000,000원", value="트라이아나")
 ])
 async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
     if 개수 <= 0:
         await interaction.response.send_message("❌ 1개 이상 구매해주세요.", ephemeral=True)
+        return
+
+    data = load_data()
+    u = get_user_data(data, interaction.user.id)
+
+    rod_buy_map = {
+        "대나무 낚싯대": 1, "카본 낚싯대": 2, "티타늄 낚싯대": 3, "트라이아나": 4
+    }
+
+    if 품목 in rod_buy_map:
+        rod_id = rod_buy_map[품목]
+        cost = ROD_DATA[rod_id]["price"]
+        if rod_id in u.get("owned_rods", [0]):
+            await interaction.response.send_message("❌ 이미 소유하고 있는 낚싯대입니다!", ephemeral=True)
+            return
+
+        if u["money"] < cost:
+            await interaction.response.send_message(f"❌ 소지금이 부족합니다. (필요 금액: {cost:,}원)", ephemeral=True)
+            return
+
+        u["money"] -= cost
+        u["owned_rods"].append(rod_id)
+        u["equipped_rod"] = rod_id
+        save_data(data)
+
+        await interaction.response.send_message(f"🎣 **[{ROD_DATA[rod_id]['name']}]**(을)를 {cost:,}원에 구매 및 바로 장착했습니다!")
         return
 
     prices = {
@@ -900,9 +1033,6 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
     }
 
     cost = prices[품목] * 개수
-    data = load_data()
-    u = get_user_data(data, interaction.user.id)
-
     if u["money"] < cost:
         await interaction.response.send_message(f"❌ 소지 금액이 부족합니다. (필요 금액: {cost:,}원)", ephemeral=True)
         return
@@ -952,7 +1082,7 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     await interaction.response.defer()
     loading_embed = discord.Embed(title="🎰 도박 진행 중...", description="결과를 계산하고 있습니다.", color=0x95a5a6)
     loading_embed.set_thumbnail(url=get_img_url(f"도박_{종류}.png"))
-    
+
     if 종류 == "마크": loading_embed.description = "⛏️ 깊은 굴을 파고 들어가는 중..."
     elif 종류 == "롤": loading_embed.description = "⚔️ 픽창에 들어섰습니다..."
     elif 종류 == "발로란트": loading_embed.description = "🔫 에임 연습하는 중..."
@@ -1009,7 +1139,7 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
         else: mult, result_title, embed_color = -10, "💥 포탈 오류 (전재산 파산)", 0x2c3e50
 
     change_amount = int(베팅금 * abs(mult)) if mult < 0 else int(베팅금 * mult)
-    
+
     if mult >= 0:
         u["money"] += change_amount
         res_str = f"🎉 **+{change_amount:,}원** 이득!"
@@ -1019,13 +1149,13 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
 
     save_data(data)
     res_embed = discord.Embed(title=f"🎰 {종류} 도박 결과", description=f"결과: **{result_title}**", color=embed_color)
-    
+
     res_img = f"도박_{종류}.png"
     for k, v in GAMBLE_IMG_MAP.items():
         if k in result_title:
             res_img = v
             break
-            
+
     res_embed.set_thumbnail(url=get_img_url(res_img))
     res_embed.add_field(name="변동 금액", value=res_str, inline=False)
     res_embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
@@ -1041,7 +1171,7 @@ async def stock_prices(interaction: discord.Interaction):
 
     embed = discord.Embed(title="📈 주식 실시간 시세표 (1시간 주기 변동)", color=0x3498db)
     embed.set_thumbnail(url=get_img_url("주식시세.png"))
-    
+
     lines = []
     for st, info in stocks.items():
         price = info["price"] if isinstance(info, dict) else info
@@ -1148,7 +1278,7 @@ async def ranking(interaction: discord.Interaction, 종류: str):
                     price = st_info["price"] if isinstance(st_info, dict) else st_info
                     total += price * count
             rank_list.append((uid, total))
-        
+
         rank_list.sort(key=lambda x: x[1], reverse=True)
         embed = discord.Embed(title="🏆 서버 부자 랭킹 TOP 10", color=0xf1c40f)
         for i, (uid, val) in enumerate(rank_list[:10]):
@@ -1204,6 +1334,34 @@ async def open_horse_race(interaction: discord.Interaction, 판돈: int):
 
     view = HorseRaceView(interaction.user, 판돈)
     await interaction.response.send_message(embed=view.build_embed(), view=view)
+
+# 17) /낚시
+@bot.tree.command(name="낚시", description="찌를 물에 던져 물고기나 보물상자를 낚습니다.")
+async def fishing(interaction: discord.Interaction):
+    data = load_data()
+    u = get_user_data(data, interaction.user.id)
+
+    rod_id = u.get("equipped_rod", 0)
+    rod_info = ROD_DATA[rod_id]
+    fatigue_cost = rod_info["fatigue"]
+
+    if u["fatigue"] < fatigue_cost:
+        await interaction.response.send_message(f"❌ 피로도가 부족합니다! (필요 피로도: {fatigue_cost})", ephemeral=True)
+        return
+
+    u["fatigue"] -= fatigue_cost
+    save_data(data)
+
+    await interaction.response.send_message(f"🎣 **[{rod_info['name']}]**(으)로 찌를 멀리 던졌습니다... (피로도 -{fatigue_cost})")
+    wait_sec = random.randint(2, 4)
+    await asyncio.sleep(wait_sec)
+
+    target_time = datetime.now().timestamp()
+    view = discord.ui.View(timeout=10)
+    view.add_item(CatchFishButton(interaction.user.id, target_time))
+
+    msg = await interaction.original_response()
+    await msg.edit(content="💥 **입질이 왔다! 3초 안에 아래 버튼을 누르세요!!**", view=view)
 
 # ---------------------------------------------------------
 # 8. 실행부
