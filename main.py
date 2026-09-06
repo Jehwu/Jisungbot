@@ -163,7 +163,7 @@ def get_car_name(level):
     return f"{CAR_NAMES[level]} [{level}강]"
 
 def get_upgrade_info(level):
-    # 강화 비용 50% 절반 인하 적용
+    # 강화 골드 비용 50% 할인 적용
     gold_cost = (level + 1) * 10000
     if level < 10: stone_cost = 0
     elif level < 15: stone_cost = level - 9
@@ -448,7 +448,7 @@ def build_artifact_embed(user):
     embed.set_footer(text=f"⏱️ 갱신까지 약 {rem_min}분 남음")
     return embed
 
-# 3) /가방 UI (물고기 일괄 매도)
+# 3) /가방 UI (초슬림 개편 - 가진 것만 출력)
 class BagItemSelect(discord.ui.Select):
     def __init__(self, user_id):
         self.user_id = user_id
@@ -577,36 +577,46 @@ class BagView(discord.ui.View):
 def build_bag_embed(user, u):
     data = load_data()
     fish_market = data["market"]["fish"]
+    eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
 
     embed = discord.Embed(title=f"🎒 {user.display_name}님의 가방", color=0x9b59b6)
     embed.set_thumbnail(url=user.display_avatar.url)
 
-    eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
-    embed.add_field(name="🎣 현재 낚싯대", value=f"**[{eq_rod_name}]** (피로도 {ROD_DATA[u.get('equipped_rod', 0)]['fatigue']} 소모)", inline=False)
+    lines = [f"🎣 **장착 낚싯대:** {eq_rod_name}\n"]
 
-    artifacts = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in DEFAULT_MARKET["artifacts"] and v > 0]
-    consumables = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["에너지드링크", "핫식스 박스", "유물 랜덤 상자"] and v > 0]
-    materials = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["강화석", "파괴 방지권", "하락 방지권"] and v > 0]
+    arts = [f"{k} {v}개" for k, v in u["inventory"].items() if k in DEFAULT_MARKET["artifacts"] and v > 0]
+    if arts:
+        lines.append(f"🏛️ **유물:** {', '.join(arts)}")
 
     fish_items = ["붕어", "고등어", "광어", "참다랑어", "돗돔", "황금 잉어"]
-    fish_str = []
+    fishes = []
     total_fish_val = 0
     for f in fish_items:
         cnt = u["inventory"].get(f, 0)
         if cnt > 0:
             p_info = fish_market.get(f, {"price": 1000})
             price = p_info["price"] if isinstance(p_info, dict) else p_info
-            val = price * cnt
-            total_fish_val += val
-            fish_str.append(f"• {f}: **{cnt}개** (개당 {price:,}원 / 총 {val:,}원)")
+            total_fish_val += price * cnt
+            fishes.append(f"{f} {cnt}개")
+    if fishes:
+        lines.append(f"🐟 **해산물 ({total_fish_val:,}원 상당):** {', '.join(fishes)}")
 
-    junk_items = [f"• {k}: **{v}개**" for k, v in u["inventory"].items() if k in ["찢어진 장화", "썩은 미역", "빈 깡통"] and v > 0]
+    con = [f"{k} {v}개" for k, v in u["inventory"].items() if k in ["에너지드링크", "핫식스 박스", "유물 랜덤 상자"] and v > 0]
+    if con:
+        lines.append(f"🥤 **소모품:** {', '.join(con)}")
 
-    embed.add_field(name="🏛️ 유물", value="\n".join(artifacts) if artifacts else "없음", inline=False)
-    embed.add_field(name=f"🐟 해산물 (총 {total_fish_val:,}원 상당)", value="\n".join(fish_str) if fish_str else "없음", inline=False)
-    if junk_items: embed.add_field(name="🗑️ 잡동사니", value="\n".join(junk_items), inline=False)
-    embed.add_field(name="🥤 소모품", value="\n".join(consumables) if consumables else "없음", inline=False)
-    embed.add_field(name="🛡️ 강화 재료", value="\n".join(materials) if materials else "없음", inline=False)
+    mats = [f"{k} {v}개" for k, v in u["inventory"].items() if k in ["강화석", "파괴 방지권", "하락 방지권"] and v > 0]
+    if mats:
+        lines.append(f"🛡️ **강화재료:** {', '.join(mats)}")
+
+    junk = [f"{k} {v}개" for k, v in u["inventory"].items() if k in ["찢어진 장화", "썩은 미역", "빈 깡통"] and v > 0]
+    if junk:
+        lines.append(f"🗑️ **잡동사니:** {', '.join(junk)}")
+
+    if len(lines) == 1:
+        lines.append("📦 소지한 아이템이 없습니다.")
+
+    embed.description = "\n".join(lines)
     return embed
 
 # 4) /강화 UI
@@ -710,7 +720,7 @@ class UpgradeView(discord.ui.View):
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="🛑 강화를 종료했습니다.", view=self)
 
-# 5) /주사위대결 UI (1~6 범위 & 애니메이션 개편)
+# 5) /주사위대결 UI
 class DiceDuelView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=180)
@@ -740,7 +750,6 @@ class DiceDuelView(discord.ui.View):
         data = load_data()
         challenger = get_user_data(data, interaction.user.id)
 
-        # 잔액 부족 검증
         if challenger["money"] < self.bet_amount:
             await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({self.bet_amount:,}원 필요)", ephemeral=True)
             return
@@ -751,21 +760,18 @@ class DiceDuelView(discord.ui.View):
         self.completed = True
         for item in self.children: item.disabled = True
 
-        # 1) 굴리는 연출
         embed = discord.Embed(title="🎲 1v1 주사위 대결", description="🎲 주사위를 굴리는 중입니다...", color=0x3498db)
         await interaction.response.edit_message(embed=embed, view=self)
 
         await asyncio.sleep(1.5)
         host_roll = random.randint(1, 6)
         
-        # 2) 방장 주사위 선공개
         embed.description = f"👑 **{self.host_user.display_name}**: 🎲 **[{host_roll}]**\n⚔️ **{interaction.user.display_name}**: 🎲 굴리는 중..."
         await interaction.message.edit(embed=embed)
 
         await asyncio.sleep(1.5)
         challenger_roll = random.randint(1, 6)
 
-        # 3) 도전 주사위 공개 및 승부 정산
         host_data = get_user_data(data, self.host_user.id)
         total_pot = self.bet_amount * 2
 
@@ -791,7 +797,7 @@ class DiceDuelView(discord.ui.View):
         final_embed.add_field(name="🏆 결과", value=res_str, inline=False)
         await interaction.message.edit(embed=final_embed)
 
-# 6) /가위바위보 UI (이모티콘 적용 & 개편)
+# 6) /가위바위보 UI
 class RPSPlayView(discord.ui.View):
     def __init__(self, host_user, challenger_user, bet_amount):
         super().__init__(timeout=120)
@@ -870,7 +876,6 @@ class RPSLobbyView(discord.ui.View):
         data = load_data()
         c_data = get_user_data(data, interaction.user.id)
 
-        # 참가자 돈 확인
         if c_data["money"] < self.bet_amount:
             await interaction.response.send_message(f"❌ 잔액이 부족합니다! ({self.bet_amount:,}원 필요)", ephemeral=True)
             return
@@ -1085,7 +1090,7 @@ async def on_ready():
 # 8. 전체 슬래시 명령어
 # ---------------------------------------------------------
 
-# 1) /내정보
+# 1) /내정보 (초슬림 개편)
 @bot.tree.command(name="내정보", description="내 재산, 피로도, 차 및 장착 낚싯대 정보를 확인합니다.")
 async def my_info(interaction: discord.Interaction):
     data = load_data()
@@ -1108,15 +1113,13 @@ async def my_info(interaction: discord.Interaction):
 
     eq_rod_name = ROD_DATA[u.get("equipped_rod", 0)]["name"]
 
-    embed.add_field(name="💳 현금 잔액", value=f"**{u['money']:,}원**", inline=True)
-    embed.add_field(name="🏛️ 추산 총자산", value=f"**{total_wealth:,}원**", inline=True)
-    embed.add_field(name="⚡ 피로도 게이지", value=get_fatigue_bar(u['fatigue']), inline=False)
-    embed.add_field(name="🚘 소유 차", value=f"**{get_car_name(u['car_level'])}**", inline=True)
-    embed.add_field(name="🎣 장착 낚싯대", value=f"**{eq_rod_name}**", inline=True)
-    embed.add_field(name="💃 춤 숙련도", value=f"**Lv.{u['dance_level']}** ({u['dance_count']}회)", inline=True)
-    embed.add_field(name="📅 연속 출석", value=f"**{u['attendance_streak']}일째**", inline=True)
-    embed.set_footer(text="💡 소지품 확인 및 장비 교체는 [/가방]을 이용하세요!")
-
+    desc = (
+        f"• **현금:** {u['money']:,}원 | **총자산:** {total_wealth:,}원\n"
+        f"• **피로도:** {get_fatigue_bar(u['fatigue'])}\n"
+        f"• **장비:** {get_car_name(u['car_level'])} | {eq_rod_name}\n"
+        f"• **활동:** 춤 Lv.{u['dance_level']} ({u['dance_count']}회) | 연속 출석 {u['attendance_streak']}일째"
+    )
+    embed.description = desc
     await interaction.response.send_message(embed=embed)
 
 # 2) /가방
@@ -1173,13 +1176,11 @@ async def attendance(interaction: discord.Interaction):
 
     embed = discord.Embed(title="📅 출석체크 완료!", color=0x2ecc71)
     embed.set_thumbnail(url=get_img_url("출석체크.png"))
-    embed.add_field(name="연속 출석", value=f"**{streak}일째**", inline=False)
-    embed.add_field(name="보상", value=f"💰 **+{reward:,}원**", inline=False)
-    embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
+    embed.description = f"• 연속 출석: **{streak}일째**\n• 보상: 💰 **+{reward:,}원** (잔액: {u['money']:,}원)"
     await interaction.response.send_message(embed=embed)
 
-# 6) /송금
-@bot.tree.command(name="송금", description="서버 유저에게 돈을 보냅니다. (하루 3회)")
+# 6) /송금 (10% 수수료 적용 및 슬림화)
+@bot.tree.command(name="송금", description="서버 유저에게 돈을 보냅니다. (10% 수수료, 하루 3회)")
 async def transfer(interaction: discord.Interaction, 받으실분: discord.Member, 금액: int):
     if 금액 <= 0:
         await interaction.response.send_message("❌ 1원 이상 송금 가능합니다.", ephemeral=True)
@@ -1203,17 +1204,21 @@ async def transfer(interaction: discord.Interaction, 받으실분: discord.Membe
         await interaction.response.send_message("❌ 잔액이 부족합니다.", ephemeral=True)
         return
 
+    fee = int(금액 * 0.10)
+    actual_amount = 금액 - fee
+
     sender["money"] -= 금액
-    receiver["money"] += 금액
+    receiver["money"] += actual_amount
     sender["remittance_count_today"] += 1
 
     save_data(data)
 
     embed = discord.Embed(title="💸 송금 완료", color=0x3498db)
-    embed.add_field(name="보낸 사람", value=interaction.user.mention, inline=True)
-    embed.add_field(name="받은 사람", value=받으실분.mention, inline=True)
-    embed.add_field(name="송금 금액", value=f"💰 **{금액:,}원**", inline=False)
-    embed.set_footer(text=f"오늘 남은 송금 횟수: {3 - sender['remittance_count_today']}회")
+    embed.description = (
+        f"• **보낸 사람:** {interaction.user.mention} ➔ **받은 사람:** {받으실분.mention}\n"
+        f"• **송금액:** {금액:,}원 (수수료 10%: -{fee:,}원)\n"
+        f"• **실수령액:** **{actual_amount:,}원** (남은 송금 횟수: {3 - sender['remittance_count_today']}회)"
+    )
     await interaction.response.send_message(embed=embed)
 
 # 7) /춤추기
@@ -1296,19 +1301,18 @@ async def dance(interaction: discord.Interaction):
         img_file = art_map.get(art, "춤_일반.png")
 
     save_data(data)
-    embed = discord.Embed(title="🕺 춤추기 완료", description=msg, color=embed_color)
+    embed = discord.Embed(title="🕺 춤추기 완료", description=f"{msg}\n• 보상: **{reward_str}**", color=embed_color)
     embed.set_image(url=get_img_url(img_file))
-    embed.add_field(name="보상", value=reward_str, inline=False)
     embed.set_footer(text=f"남은 피로도: {u['fatigue']}/100")
     await interaction.response.send_message(embed=embed)
 
-# 8) /상점
+# 8) /상점 (강화석 팩 15만 원 조정)
 @bot.tree.command(name="상점", description="회복제, 유물상자, 강화재료 및 낚싯대를 구매합니다.")
 @app_commands.choices(품목=[
     app_commands.Choice(name="🥤 에너지드링크 (+30 피로도) - 10,000원", value="에너지드링크"),
     app_commands.Choice(name="⚡ 핫식스 박스 (+100 피로도 완충) - 30,000원", value="핫식스 박스"),
     app_commands.Choice(name="📦 유물 랜덤 상자 - 80,000원", value="유물 랜덤 상자"),
-    app_commands.Choice(name="✨ 강화석 팩 (10개) - 15,000원", value="강화석 팩"),
+    app_commands.Choice(name="✨ 강화석 팩 (10개) - 150,000원", value="강화석 팩"),
     app_commands.Choice(name="🛡️ 파괴 방지권 - 40,000원", value="파괴 방지권"),
     app_commands.Choice(name="📉 하락 방지권 - 20,000원", value="하락 방지권"),
     app_commands.Choice(name="🎣 대나무 낚싯대 (피로도 7 소모) - 30,000원", value="대나무 낚싯대"),
@@ -1347,7 +1351,7 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
 
     prices = {
         "에너지드링크": 10000, "핫식스 박스": 30000, "유물 랜덤 상자": 80000,
-        "강화석 팩": 15000, "파괴 방지권": 40000, "하락 방지권": 20000
+        "강화석 팩": 150000, "파괴 방지권": 40000, "하락 방지권": 20000
     }
     shop_img_map = {
         "에너지드링크": "상점_에너지드링크.png", "핫식스 박스": "상점_핫식스.png",
@@ -1369,8 +1373,8 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
     embed.set_thumbnail(url=get_img_url(shop_img_map.get(품목, "상점_강화석.png")))
     await interaction.response.send_message(embed=embed)
 
-# 9) /도박 (정밀 수학 공식 및 로딩 멘트 분기 버그 수정)
-@bot.tree.command(name="도박", description="게임 컨셉의 도박을 진행합니다. (마이너스 손실 가능)")
+# 9) /도박 (이미지 버그 완전 수정 - 1:1 명시적 직접 할당 방식)
+@bot.tree.command(name="도박", description="게임 컨셉의 도박을 진행합니다.")
 @app_commands.choices(종류=[
     app_commands.Choice(name="⛏️ 마인크래프트 (초안전형)", value="마크"),
     app_commands.Choice(name="⚔️ 리그 오브 레전드 (밸런스형)", value="롤"),
@@ -1385,17 +1389,14 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
 
-    # 1) 잔액 사전 검증
     if u["money"] < 베팅금:
         await interaction.response.send_message(f"❌ 현금이 부족합니다! (필요: {베팅금:,}원 / 보유: {u['money']:,}원)", ephemeral=True)
         return
 
-    # 베팅금 선차감
     u["money"] -= 베팅금
 
     await interaction.response.defer()
     
-    # 2) 종목별 전용 로딩 멘트 복원
     if 종류 == "마크": load_desc = "⛏️ 깊은 굴을 파고 들어가는 중..."
     elif 종류 == "롤": load_desc = "⚔️ 소환사의 협곡에 입장하는 중..."
     elif 종류 == "발로란트": load_desc = "🔫 에임 조준하는 중..."
@@ -1408,8 +1409,9 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     await asyncio.sleep(1.5)
 
     rand = random.random() * 100
-    mult, result_title, embed_color, img_file = 0, "", 0x2ecc71, "도박_마크.png"
+    mult, result_title, embed_color, img_file = 0, "", 0x2ecc71, f"도박_{종류}.png"
 
+    # 이미지 꼬임 현상을 방지하기 위해 각 조건문에서 img_file을 1:1로 직접 할당합니다.
     if 종류 == "마크":
         if rand < 0.2: mult, result_title, embed_color, img_file = 30, "🔹 엔더드래곤", 0xf1c40f, "마크_엔더드래곤.png"
         elif rand < 4.2: mult, result_title, embed_color, img_file = 5, "🔹 네더라이트", 0x9b59b6, "마크_네더라이트.png"
@@ -1454,7 +1456,6 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
         elif rand < 90.0: mult, result_title, embed_color, img_file = -3, "🔸 스텝 댄싱", 0xe74c3c, "권루트_스텝댄싱.png"
         else: mult, result_title, embed_color, img_file = -10, "💥 포탈 오류 (전재산 파산)", 0x2c3e50, "권루트_포탈오류.png"
 
-    # 3) 정확한 당첨금 및 손익 계산
     if mult > 0:
         payout = int(베팅금 * mult)
         u["money"] += payout
@@ -1464,7 +1465,7 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
         else: res_str = f"💥 **-{abs(net):,}원** 손실..."
     elif mult == 0:
         res_str = f"💥 **-{베팅금:,}원** 손실..."
-    else: # mult < 0 페널티
+    else:
         extra_loss = int(베팅금 * (abs(mult) - 1))
         u["money"] -= extra_loss
         total_loss = 베팅금 + extra_loss
@@ -1472,10 +1473,8 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
 
     save_data(data)
 
-    res_embed = discord.Embed(title=f"🎰 {종류} 도박 결과", description=f"결과: **{result_title}**", color=embed_color)
+    res_embed = discord.Embed(title=f"🎰 {종류} 도박 결과", description=f"결과: **{result_title}**\n• {res_str}\n• 현재 잔액: **{u['money']:,}원**", color=embed_color)
     res_embed.set_thumbnail(url=get_img_url(img_file))
-    res_embed.add_field(name="정산 내역", value=res_str, inline=False)
-    res_embed.add_field(name="현재 잔액", value=f"{u['money']:,}원", inline=False)
     await msg.edit(embed=res_embed)
 
 # 10) /도박확률
