@@ -62,6 +62,17 @@ DEFAULT_MARKET = {
     }
 }
 
+FISH_LEVEL_REQS = [25, 50, 80, 120, 160, 225, 300, 400, 550, 700]
+
+def update_fish_level(u):
+    fc = u.get("fish_count", 0)
+    lvl = 0
+    for i, req in enumerate(FISH_LEVEL_REQS):
+        if fc >= req:
+            lvl = i + 1
+    u["fish_level"] = lvl
+    return lvl
+
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {"users": {}, "market": DEFAULT_MARKET}
@@ -101,11 +112,15 @@ def get_user_data(data, user_id):
             "last_fish_time": 0,
             "dance_count": 0,
             "dance_level": 0,
+            "fish_count": 0,
+            "fish_level": 0,
             "drink_used_today": 0,
             "hot6_used_today": 0,
             "remittance_count_today": 0,
             "last_check_date": "",
             "last_bankrupt_date": "",
+            "cleared_dungeon_today": [],
+            "dungeon_clear_date": "",
             "attendance_streak": 0,
             "inventory": {
                 "똥먹방 비법서": 0, "차은우지성 조각상": 0, "170KG 비법서": 0,
@@ -127,12 +142,17 @@ def get_user_data(data, user_id):
         u.setdefault("last_bankrupt_date", "")
         u.setdefault("attendance_streak", 0)
         u.setdefault("last_fish_time", 0)
+        u.setdefault("fish_count", 0)
+        u.setdefault("fish_level", 0)
+        u.setdefault("cleared_dungeon_today", [])
+        u.setdefault("dungeon_clear_date", "")
         u.setdefault("owned_rods", [0])
         u.setdefault("equipped_rod", 0)
         for fish_item in ["붕어", "고등어", "광어", "참다랑어", "돗돔", "황금 잉어", "찢어진 장화", "썩은 미역", "빈 깡통"]:
             u["inventory"].setdefault(fish_item, 0)
         if "car_level" not in u:
             u["car_level"] = u.pop("weapon_level", 0)
+        update_fish_level(u)
     return data["users"][uid]
 
 # ---------------------------------------------------------
@@ -156,6 +176,69 @@ ROD_DATA = {
     4: {"name": "✨ 트라이아나", "price": 2000000, "fatigue": 15, "rates": (8.0, 46.0, 35.0, 7.0, 4.0)}
 }
 
+DUNGEON_DATA = {
+    1: {
+        "name": "1층: 동네 고가도로",
+        "rec": "1~5강",
+        "boss": "🛵 딸배왕 박씨",
+        "boss_speed": 14,
+        "gold": 20000,
+        "stones": 2,
+        "protect": 0,
+        "degrade_protect": 0
+    },
+    2: {
+        "name": "2층: 수도권 외곽순환",
+        "rec": "6~10강",
+        "boss": "🏎️ 야간 칼치기 폭주족",
+        "boss_speed": 22,
+        "gold": 50000,
+        "stones": 0,
+        "protect": 0,
+        "degrade_protect": 1
+    },
+    3: {
+        "name": "3층: 태백 레이스웨이",
+        "rec": "11~15강",
+        "boss": "🏁 프로 레이싱팀 에이스",
+        "boss_speed": 31,
+        "gold": 100000,
+        "stones": 5,
+        "protect": 0,
+        "degrade_protect": 0
+    },
+    4: {
+        "name": "4층: 영암 F1 서킷",
+        "rec": "16~20강",
+        "boss": "🏆 전직 F1 챔피언",
+        "boss_speed": 40,
+        "gold": 250000,
+        "stones": 0,
+        "protect": 1,
+        "degrade_protect": 0
+    },
+    5: {
+        "name": "5층: 뉘르부르크링",
+        "rec": "21~25강",
+        "boss": "👻 뉘르의 유령 드라이버",
+        "boss_speed": 50,
+        "gold": 500000,
+        "stones": 0,
+        "protect": 0,
+        "degrade_protect": 2
+    },
+    6: {
+        "name": "6층: 아우토반 무제한",
+        "rec": "26~30강",
+        "boss": "👑 속도의 신 [지성]",
+        "boss_speed": 62,
+        "gold": 1000000,
+        "stones": 0,
+        "protect": 2,
+        "degrade_protect": 0
+    }
+}
+
 def get_car_name(level):
     if level <= 0: return "뚜벅이 (맨발)"
     if level >= 31: return "✨ 부가티 라 부아튀르 누아르 [30(+1)강]"
@@ -163,7 +246,6 @@ def get_car_name(level):
     return f"{CAR_NAMES[level]} [{level}강]"
 
 def get_upgrade_info(level):
-    # 강화 골드 비용 50% 할인 적용
     gold_cost = (level + 1) * 10000
     if level < 10: stone_cost = 0
     elif level < 15: stone_cost = level - 9
@@ -236,6 +318,7 @@ async def daily_reset():
         user["drink_used_today"] = 0
         user["hot6_used_today"] = 0
         user["remittance_count_today"] = 0
+        user["cleared_dungeon_today"] = []
     save_data(data)
 
 # ---------------------------------------------------------
@@ -319,7 +402,6 @@ class ArtifactSellModal(discord.ui.Modal):
 # 6. UI 대시보드 컴포넌트 (/주식 /유물 /가방 /강화 /대결 /가위바위보)
 # ---------------------------------------------------------
 
-# 1) 통합 /주식 UI
 class StockView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
@@ -387,7 +469,6 @@ def build_stock_embed(user):
     embed.set_footer(text=f"⏱️ 갱신까지 약 {rem_min}분 남음")
     return embed
 
-# 2) 통합 /유물 UI
 class ArtifactView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
@@ -448,7 +529,6 @@ def build_artifact_embed(user):
     embed.set_footer(text=f"⏱️ 갱신까지 약 {rem_min}분 남음")
     return embed
 
-# 3) /가방 UI (초슬림 개편 - 가진 것만 출력)
 class BagItemSelect(discord.ui.Select):
     def __init__(self, user_id):
         self.user_id = user_id
@@ -619,7 +699,6 @@ def build_bag_embed(user, u):
     embed.description = "\n".join(lines)
     return embed
 
-# 4) /강화 UI
 def build_upgrade_embed(user, u, last_result_msg=None):
     curr_lvl = u["car_level"]
 
@@ -720,7 +799,6 @@ class UpgradeView(discord.ui.View):
         for item in self.children: item.disabled = True
         await interaction.response.edit_message(content="🛑 강화를 종료했습니다.", view=self)
 
-# 5) /주사위대결 UI
 class DiceDuelView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=180)
@@ -797,7 +875,6 @@ class DiceDuelView(discord.ui.View):
         final_embed.add_field(name="🏆 결과", value=res_str, inline=False)
         await interaction.message.edit(embed=final_embed)
 
-# 6) /가위바위보 UI
 class RPSPlayView(discord.ui.View):
     def __init__(self, host_user, challenger_user, bet_amount):
         super().__init__(timeout=120)
@@ -891,7 +968,6 @@ class RPSLobbyView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=play_view)
 
-# 7) /경마개장 UI
 class HorseRaceView(discord.ui.View):
     def __init__(self, host_user, bet_amount):
         super().__init__(timeout=300)
@@ -988,7 +1064,6 @@ class HorseRaceView(discord.ui.View):
         win_embed.add_field(name="💰 상금", value=f"총 **+{total_pot:,}원** 독식!", inline=False)
         await interaction.message.edit(embed=win_embed)
 
-# 8) /낚시 미니게임 버튼
 class CatchFishButton(discord.ui.Button):
     def __init__(self, user_id, target_time):
         super().__init__(label="🎣 낚아채기!", style=discord.ButtonStyle.success)
@@ -1065,11 +1140,14 @@ class CatchFishButton(discord.ui.Button):
             embed_color = 0x95a5a6
             img_file = "낚시_쓰레기.png"
 
+        u["fish_count"] = u.get("fish_count", 0) + 1
+        update_fish_level(u)
+
         save_data(data)
 
         res_embed = discord.Embed(title=res_title, description=res_desc, color=embed_color)
         res_embed.set_image(url=get_img_url(img_file))
-        res_embed.set_footer(text=f"⏱️ 남은 피로도: {u['fatigue']}/100")
+        res_embed.set_footer(text=f"⏱️ 남은 피로도: {u['fatigue']}/100 | 🎣 낚시 Lv.{u['fish_level']} ({u['fish_count']}회)")
         await interaction.response.edit_message(content=None, embed=res_embed, view=None)
 
 # ---------------------------------------------------------
@@ -1091,7 +1169,7 @@ async def on_ready():
 # ---------------------------------------------------------
 
 # 1) /내정보 (초슬림 개편)
-@bot.tree.command(name="내정보", description="내 재산, 피로도, 차 및 장착 낚싯대 정보를 확인합니다.")
+@bot.tree.command(name="내정보", description="내 재산, 피로도, 차, 장착 낚싯대 및 숙련도 정보를 확인합니다.")
 async def my_info(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
@@ -1117,19 +1195,20 @@ async def my_info(interaction: discord.Interaction):
         f"• **현금:** {u['money']:,}원 | **총자산:** {total_wealth:,}원\n"
         f"• **피로도:** {get_fatigue_bar(u['fatigue'])}\n"
         f"• **장비:** {get_car_name(u['car_level'])} | {eq_rod_name}\n"
-        f"• **활동:** 춤 Lv.{u['dance_level']} ({u['dance_count']}회) | 연속 출석 {u['attendance_streak']}일째"
+        f"• **숙련도:** 🕺 춤 Lv.{u['dance_level']} ({u['dance_count']}회) | 🎣 낚시 Lv.{u['fish_level']} ({u['fish_count']}회)\n"
+        f"• **연속 출석:** {u['attendance_streak']}일째"
     )
     embed.description = desc
     await interaction.response.send_message(embed=embed)
 
-# 2) /가방
+# 2) /가방 (자기자신만 볼 수 있게 ephemeral=True)
 @bot.tree.command(name="가방", description="소지품 확인, 소모품 사용 및 물고기 일괄 매도를 진행합니다.")
 async def bag(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
     embed = build_bag_embed(interaction.user, u)
     view = BagView(interaction.user.id, u.get("owned_rods", [0]))
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # 3) /주식
 @bot.tree.command(name="주식", description="실시간 주식 시세를 확인하고 바로 매수/매도합니다.")
@@ -1179,7 +1258,7 @@ async def attendance(interaction: discord.Interaction):
     embed.description = f"• 연속 출석: **{streak}일째**\n• 보상: 💰 **+{reward:,}원** (잔액: {u['money']:,}원)"
     await interaction.response.send_message(embed=embed)
 
-# 6) /송금 (10% 수수료 적용 및 슬림화)
+# 6) /송금
 @bot.tree.command(name="송금", description="서버 유저에게 돈을 보냅니다. (10% 수수료, 하루 3회)")
 async def transfer(interaction: discord.Interaction, 받으실분: discord.Member, 금액: int):
     if 금액 <= 0:
@@ -1221,7 +1300,7 @@ async def transfer(interaction: discord.Interaction, 받으실분: discord.Membe
     )
     await interaction.response.send_message(embed=embed)
 
-# 7) /춤추기
+# 7) /춤추기 (Lv.5 만렙 유지)
 @bot.tree.command(name="춤추기", description="춤을 춰서 돈, 유물, 강화석을 얻습니다.")
 async def dance(interaction: discord.Interaction):
     data = load_data()
@@ -1303,10 +1382,10 @@ async def dance(interaction: discord.Interaction):
     save_data(data)
     embed = discord.Embed(title="🕺 춤추기 완료", description=f"{msg}\n• 보상: **{reward_str}**", color=embed_color)
     embed.set_image(url=get_img_url(img_file))
-    embed.set_footer(text=f"남은 피로도: {u['fatigue']}/100")
+    embed.set_footer(text=f"남은 피로도: {u['fatigue']}/100 | 춤 Lv.{u['dance_level']}")
     await interaction.response.send_message(embed=embed)
 
-# 8) /상점 (강화석 팩 15만 원 조정)
+# 8) /상점
 @bot.tree.command(name="상점", description="회복제, 유물상자, 강화재료 및 낚싯대를 구매합니다.")
 @app_commands.choices(품목=[
     app_commands.Choice(name="🥤 에너지드링크 (+30 피로도) - 10,000원", value="에너지드링크"),
@@ -1373,7 +1452,7 @@ async def shop(interaction: discord.Interaction, 품목: str, 개수: int = 1):
     embed.set_thumbnail(url=get_img_url(shop_img_map.get(품목, "상점_강화석.png")))
     await interaction.response.send_message(embed=embed)
 
-# 9) /도박 (이미지 버그 완전 수정 - 1:1 명시적 직접 할당 방식)
+# 9) /도박
 @bot.tree.command(name="도박", description="게임 컨셉의 도박을 진행합니다.")
 @app_commands.choices(종류=[
     app_commands.Choice(name="⛏️ 마인크래프트 (초안전형)", value="마크"),
@@ -1411,7 +1490,6 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     rand = random.random() * 100
     mult, result_title, embed_color, img_file = 0, "", 0x2ecc71, f"도박_{종류}.png"
 
-    # 이미지 꼬임 현상을 방지하기 위해 각 조건문에서 img_file을 1:1로 직접 할당합니다.
     if 종류 == "마크":
         if rand < 0.2: mult, result_title, embed_color, img_file = 30, "🔹 엔더드래곤", 0xf1c40f, "마크_엔더드래곤.png"
         elif rand < 4.2: mult, result_title, embed_color, img_file = 5, "🔹 네더라이트", 0x9b59b6, "마크_네더라이트.png"
@@ -1670,21 +1748,29 @@ async def bankruptcy_relief(interaction: discord.Interaction):
     embed = discord.Embed(title="⚖️ 개인회생 파산신청 결과", description=res_str, color=color)
     await interaction.response.send_message(embed=embed)
 
-# 17) /낚시
+# 17) /낚시 (레벨별 쿨타임 및 피로도 감쇄 적용)
 @bot.tree.command(name="낚시", description="찌를 물에 던져 물고기나 보물상자를 낚습니다.")
 async def fishing(interaction: discord.Interaction):
     data = load_data()
     u = get_user_data(data, interaction.user.id)
 
+    fish_lvl = update_fish_level(u)
+    cd = max(30, 60 - (fish_lvl * 3))
+
     now = datetime.now().timestamp()
-    if now - u.get("last_fish_time", 0) < 60:
-        remain = int(60 - (now - u.get("last_fish_time", 0)))
+    if now - u.get("last_fish_time", 0) < cd:
+        remain = int(cd - (now - u.get("last_fish_time", 0)))
         await interaction.response.send_message(f"⏳ 낚싯대를 정비 중입니다! ({remain}초 후 다시 가능)", ephemeral=True)
         return
 
     rod_id = u.get("equipped_rod", 0)
     rod_info = ROD_DATA[rod_id]
-    fatigue_cost = rod_info["fatigue"]
+    
+    fatigue_reduction = 0
+    if fish_lvl >= 7: fatigue_reduction = 3
+    elif fish_lvl >= 4: fatigue_reduction = 2
+
+    fatigue_cost = max(1, rod_info["fatigue"] - fatigue_reduction)
 
     if u["fatigue"] < fatigue_cost:
         await interaction.response.send_message(f"❌ 피로도가 부족합니다! ({fatigue_cost} 필요)", ephemeral=True)
@@ -1705,6 +1791,118 @@ async def fishing(interaction: discord.Interaction):
 
     msg = await interaction.original_response()
     await msg.edit(content="💥 **입질이 왔다! 3초 안에 아래 버튼을 누르세요!!**", view=view)
+
+# 18) /서킷던전 (신규 PVE 2줄 실시간 이동 레이스)
+@bot.tree.command(name="서킷던전", description="차량 강화 등급으로 보스 레이서와 실시간 1v1 레이스를 펼칩니다.")
+@app_commands.choices(층=[
+    app_commands.Choice(name="1층: 동네 고가도로 (추천 1~5강)", value=1),
+    app_commands.Choice(name="2층: 수도권 외곽순환 (추천 6~10강)", value=2),
+    app_commands.Choice(name="3층: 태백 레이스웨이 (추천 11~15강)", value=3),
+    app_commands.Choice(name="4층: 영암 F1 서킷 (추천 16~20강)", value=4),
+    app_commands.Choice(name="5층: 뉘르부르크링 (추천 21~25강)", value=5),
+    app_commands.Choice(name="6층: 아우토반 무제한 (추천 26~30강)", value=6)
+])
+async def circuit_dungeon(interaction: discord.Interaction, 층: int):
+    data = load_data()
+    u = get_user_data(data, interaction.user.id)
+
+    now_kst = datetime.now(KST)
+    today_str = now_kst.strftime("%Y-%m-%d")
+
+    if u.get("dungeon_clear_date", "") != today_str:
+        u["cleared_dungeon_today"] = []
+        u["dungeon_clear_date"] = today_str
+
+    if 층 in u.get("cleared_dungeon_today", []):
+        await interaction.response.send_message(f"❌ **{층}층**은 오늘 이미 클리어하셨습니다! (매일 자정 초기화)", ephemeral=True)
+        return
+
+    if u["fatigue"] < 20:
+        await interaction.response.send_message("❌ 서킷 던전에 입장하기 위한 피로도(20)가 부족합니다!", ephemeral=True)
+        return
+
+    u["fatigue"] -= 20
+    save_data(data)
+
+    d_info = DUNGEON_DATA[층]
+    car_lvl = u["car_level"]
+    car_name = get_car_name(car_lvl)
+
+    embed = discord.Embed(
+        title=f"🏎️ [서킷 던전] {d_info['name']} - 레이스 시작!",
+        description=f"• **내 차량:** {car_name}\n• **보스:** {d_info['boss']}\n\n🏁 100m 결승선을 향해 출발합니다!",
+        color=0x3498db
+    )
+    await interaction.response.send_message(embed=embed)
+    msg = await interaction.original_response()
+
+    p_dist, b_dist = 0, 0
+    winner = None
+
+    while not winner:
+        await asyncio.sleep(1.2)
+
+        p_speed = int(8 + (car_lvl * 1.8) + random.randint(-2, 4))
+        b_speed = int(d_info["boss_speed"] + random.randint(-2, 4))
+
+        p_dist = min(100, p_dist + p_speed)
+        b_dist = min(100, b_dist + b_speed)
+
+        p_filled = p_dist // 10
+        p_bar = "─" * p_filled + "🏎️" + "─" * (10 - p_filled)
+
+        b_filled = b_dist // 10
+        b_bar = "─" * b_filled + "🚗" + "─" * (10 - b_filled)
+
+        race_str = (
+            f"🏎️ **{d_info['name']} 레이스 진행 중!**\n\n"
+            f"`내  차` 🏁{p_bar} `[{p_dist}m]`\n"
+            f"`보  스` 🏁{b_bar} `[{b_dist}m]`"
+        )
+        embed.description = race_str
+        await msg.edit(embed=embed)
+
+        if p_dist >= 100 or b_dist >= 100:
+            if p_dist >= 100 and b_dist < 100:
+                winner = "player"
+            elif b_dist >= 100 and p_dist < 100:
+                winner = "boss"
+            else:
+                winner = "player" if p_dist >= b_dist else "boss"
+
+    data = load_data()
+    u = get_user_data(data, interaction.user.id)
+
+    if winner == "player":
+        u["money"] += d_info["gold"]
+        rewards = [f"💰 +{d_info['gold']:,}원"]
+
+        if d_info["stones"] > 0:
+            u["inventory"]["강화석"] += d_info["stones"]
+            rewards.append(f"✨ 강화석 {d_info['stones']}개")
+        if d_info["protect"] > 0:
+            u["inventory"]["파괴 방지권"] += d_info["protect"]
+            rewards.append(f"🛡️ 파괴 방지권 {d_info['protect']}개")
+        if d_info["degrade_protect"] > 0:
+            u["inventory"]["하락 방지권"] += d_info["degrade_protect"]
+            rewards.append(f"📉 하락 방지권 {d_info['degrade_protect']}개")
+
+        if 층 not in u["cleared_dungeon_today"]:
+            u["cleared_dungeon_today"].append(층)
+
+        save_data(data)
+
+        win_embed = discord.Embed(title=f"🏆 {층}층 보스 격파 성공!", color=0x2ecc71)
+        win_embed.description = (
+            f"🎉 보스 **[{d_info['boss']}]**를 제치고 가장 먼저 결승선을 통과했습니다!\n\n"
+            f"🎁 **클리어 보상:**\n• " + "\n• ".join(rewards)
+        )
+        await msg.edit(embed=win_embed)
+    else:
+        save_data(data)
+        lose_embed = discord.Embed(title=f"💥 {층}층 완패...", color=0xe74c3c)
+        lose_embed.description = f"보스 **[{d_info['boss']}]**의 압도적인 출력에 밀렸습니다...\n차량을 더 강화한 후 재도전해보세요!"
+        await msg.edit(embed=lose_embed)
 
 # ---------------------------------------------------------
 # 9. 실행부
