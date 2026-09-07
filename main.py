@@ -249,7 +249,6 @@ ROD_DATA = {
     4: {"name": "✨ 트라이아나", "price": 2000000, "fatigue": 15, "rates": (8.0, 46.0, 35.0, 7.0, 4.0)}
 }
 
-# 사진 스펙 적용 (4단계 1.0배 = 구매가 본전)
 BOMB_BOX_SPECS = {
     1: {"mult": 0.1, "rate": 95},
     2: {"mult": 0.2, "rate": 90},
@@ -476,7 +475,7 @@ class FishSellModal(discord.ui.Modal):
 # 7. UI 개편 컴포넌트 (/상점 /가방 /물고기가방 /스탯강화 /확률 /폭탄박스)
 # ---------------------------------------------------------
 
-# --- 폭탄박스 게임 View (수정완료: 큰 이미지 및 가격별 배율 적용) ---
+# --- 폭탄박스 게임 View ---
 class BombBoxGameView(discord.ui.View):
     def __init__(self, user_id, box_cost, stage=1):
         super().__init__(timeout=120)
@@ -602,7 +601,7 @@ class BombBoxLobbyView(discord.ui.View):
     @discord.ui.button(label="💣 100만 원 박스", style=discord.ButtonStyle.danger, row=0)
     async def box3(self, interaction, button): await self.start_game(interaction, 1000000)
 
-# --- 신규 /스탯강화 UI ---
+# --- /스탯강화 UI ---
 class StatUpgradeView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
@@ -994,7 +993,7 @@ class FishBagView(discord.ui.View):
         await interaction.response.edit_message(embed=new_embed, view=new_view)
         await interaction.followup.send(f"💰 물고기 전체 일괄 매도 완료! (+{total_earned:,}원)", ephemeral=True)
 
-# --- 개편된 /확률 (3페이지: 폭탄박스 확률 추가) ---
+# --- 개편된 /확률 (정밀 수정) ---
 class OddsDashboardView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
@@ -1003,11 +1002,27 @@ class OddsDashboardView(discord.ui.View):
 
     def build_embed(self):
         if self.page == 1:
-            embed = discord.Embed(title="📊 [1페이지] 도박 확률 및 배율 안내", color=0x3498db)
-            embed.add_field(name="⛏️ 마인크래프트 (초안전형)", value="• 엔더드래곤 (0.2% | 30배)\n• 네더라이트 (4.0% | 5배)\n• 다이아 (10.0% | 2배)\n• 철 (28.8% | 1배)\n• 평화 (12.0% | 0배)\n• 크리퍼 (29.0% | -1배)\n• 용암 (11.0% | -2배)\n• 엄크 (5.0% | -5배)", inline=False)
-            embed.add_field(name="⚔️ 리그 오브 레전드 (밸런스형)", value="• 챌린저 (0.02% | 100배)\n• 그랜드마스터 (0.04% | 50배)\n• 마스터 (0.34% | 20배)\n• 다이아 (2.60% | 5배)\n• 에메랄드 (5.00% | 3배)\n• 플래티넘 (9.50% | 2배)\n• 골드 (28.0% | 1배)\n• 패배/감점 (-1 ~ -5배)", inline=False)
-            embed.add_field(name="🔫 발로란트 (고위험형)", value="• 레디언트 (0.02% | 100배)\n• 불멸 (0.04% | 50배)\n• 초월자 (0.34% | 20배)\n• 다이아 (3.60% | 5배)\n• 플래티넘 (9.50% | 2배)\n• 골드 (32.0% | 1배)\n• 패배/감점 (-1 ~ -5배)", inline=False)
-            embed.add_field(name="🕺 권루트 (극단적 200배)", value="• L을 가져가~ (0.01% | 200배)\n• 측면 대 측면 (0.03% | 80배)\n• 셀카 (0.26% | 30배)\n• 팁 토 (2.70% | 10배)\n• 기분에 따라 (7.00% | 3배)\n• 라운드 앤 라운드 (20.0% | 1.5배)\n• 포탈 오류 (10.0% | 전재산 파산)", inline=False)
+            embed = discord.Embed(title="📊 [1페이지] 도박 확률 및 보상 안내", color=0x3498db)
+            embed.add_field(
+                name="⛏️ 마인크래프트",
+                value="• 엔더드래곤 (0.2% | +30배)\n• 겉날개 or 네더라이트 (4.0% | +5배)\n• 다이아몬드 or 무거운 코어 (10.0% | +2배)\n• 철 발견 (28.8% | +1배)\n• 평화로운 하루 (12.0% | 변동없음)\n• 크리퍼 or 엔더맨 (29.0% | -1배)\n• 용암 or 사망 (11.0% | -2배)\n• 정전 or 엄크 (5.0% | -5배)",
+                inline=False
+            )
+            embed.add_field(
+                name="⚔️ 리그 오브 레전드 (배치)",
+                value="• 챌린저 (0.02% | +100배)\n• 그랜드마스터 (0.04% | +50배)\n• 마스터 (0.34% | +20배)\n• 다이아몬드 (2.6% | +5배)\n• 에메랄드 (5.0% | +3배)\n• 플래티넘 (9.5% | +2배)\n• 골드 (28.0% | +1배)\n• 실버 (30.0% | -1배)\n• 브론즈 (20.0% | -2배)\n• 아이언 (4.5% | -5배)",
+                inline=False
+            )
+            embed.add_field(
+                name="🔫 발로란트",
+                value="• 레디언트 (0.02% | +100배)\n• 불멸 (0.04% | +50배)\n• 초월자 (0.34% | +20배)\n• 다이아몬드 (3.6% | +5배)\n• 플래티넘 (9.5% | +2배)\n• 골드 (32.0% | +1배)\n• 실버 (30.0% | -1배)\n• 브론즈 (20.0% | -2배)\n• 아이언 (4.5% | -5배)",
+                inline=False
+            )
+            embed.add_field(
+                name="🕺 권루트",
+                value="• L을 가져가~ (0.01% | +200배)\n• 측면 대 측면 (0.03% | +80배)\n• 셀카 (0.26% | +30배)\n• 팁 토 (2.70% | +10배)\n• 기분에 따라 (7.00% | +3배)\n• 라운드 앤 라운드 (20.0% | +1.5배)\n• 애를 가져가~ (35.0% | -1배)\n• 스텝 댄싱 (25.0% | -3배)\n• 포탈 오류 (10.0% | -10배)",
+                inline=False
+            )
         elif self.page == 2:
             embed = discord.Embed(title="🎣 [2페이지] 낚싯대별 확률 및 변이 안내", color=0x2ecc71)
             for r_id, r_info in ROD_DATA.items():
@@ -1719,7 +1734,7 @@ async def on_ready():
 # 9. 전체 슬래시 명령어
 # ---------------------------------------------------------
 
-# 1) /내정보 (슬림 UI 개편)
+# 1) /내정보
 @bot.tree.command(name="내정보", description="내 재산, 피로도, 차, 장착 낚싯대 및 숙련도 엠블럼 정보를 확인합니다.")
 async def my_info(interaction: discord.Interaction):
     data = load_data()
@@ -1801,7 +1816,7 @@ async def shop(interaction: discord.Interaction):
     view = ShopSelectView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 6) /확률 (폭탄박스 페이지 포함)
+# 6) /확률
 @bot.tree.command(name="확률", description="도박 당첨 확률, 낚싯대 잡이 확률 및 폭탄박스 확률을 확인합니다.")
 async def odds_dashboard(interaction: discord.Interaction):
     view = OddsDashboardView(interaction.user.id)
@@ -1822,7 +1837,7 @@ async def artifact_dashboard(interaction: discord.Interaction):
     view = ArtifactView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 9) /폭탄박스 (수정 완료)
+# 9) /폭탄박스
 @bot.tree.command(name="폭탄박스", description="단계별로 폭탄을 두두려 대박 상금을 획득하는 두두리기 게임!")
 async def bomb_box(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -2060,17 +2075,17 @@ async def fishing(interaction: discord.Interaction):
     msg = await interaction.original_response()
     await msg.edit(content="💥 **입질이 왔다! 3초 안에 아래 버튼을 누르세요!!**", view=view)
 
-# 15) /도박
+# 15) /도박 (정밀 수정 완료)
 @bot.tree.command(name="도박", description="게임 컨셉의 도박을 진행합니다.")
 @app_commands.choices(종류=[
-    app_commands.Choice(name="⛏️ 마인크래프트 (초안전형)", value="마크"),
-    app_commands.Choice(name="⚔️ 리그 오브 레전드 (밸런스형)", value="롤"),
-    app_commands.Choice(name="🔫 발로란트 (고위험형)", value="발로란트"),
-    app_commands.Choice(name="🕺 권루트 (극단적 초고위험 200배)", value="권루트")
+    app_commands.Choice(name="⛏️ 마인크래프트", value="마크"),
+    app_commands.Choice(name="⚔️ 리그 오브 레전드 (배치)", value="롤"),
+    app_commands.Choice(name="🔫 발로란트", value="발로란트"),
+    app_commands.Choice(name="🕺 권루트", value="권루트")
 ])
 async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
-    if 베팅금 < 1000:
-        await interaction.response.send_message("❌ 최소 베팅금은 **1,000원** 이상입니다.", ephemeral=True)
+    if 베팅금 < 3000:
+        await interaction.response.send_message("❌ 최소 베팅금은 **3,000원** 이상입니다.", ephemeral=True)
         return
 
     data = load_data()
@@ -2093,13 +2108,13 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
 
     if 종류 == "마크":
         if rand < 0.2: mult, result_title, embed_color, img_file = 30, "🔹 엔더드래곤", 0xf1c40f, "마크_엔더드래곤.png"
-        elif rand < 4.2: mult, result_title, embed_color, img_file = 5, "🔹 네더라이트", 0x9b59b6, "마크_네더라이트.png"
-        elif rand < 14.2: mult, result_title, embed_color, img_file = 2, "🔹 다이아몬드", 0x3498db, "마크_다이아.png"
+        elif rand < 4.2: mult, result_title, embed_color, img_file = 5, "🔹 겉날개 or 네더라이트", 0x9b59b6, "마크_네더라이트.png"
+        elif rand < 14.2: mult, result_title, embed_color, img_file = 2, "🔹 다이아몬드 or 무거운 코어", 0x3498db, "마크_다이아.png"
         elif rand < 43.0: mult, result_title, embed_color, img_file = 1, "🔹 철 발견", 0x2ecc71, "마크_철.png"
         elif rand < 55.0: mult, result_title, embed_color, img_file = 0, "⬛ 평화로운 하루", 0x95a5a6, "마크_평화.png"
-        elif rand < 84.0: mult, result_title, embed_color, img_file = -1, "🔸 크리퍼 폭발", 0xe74c3c, "마크_크리퍼.png"
-        elif rand < 95.0: mult, result_title, embed_color, img_file = -2, "🔸 용암 사망", 0xe74c3c, "마크_용암.png"
-        else: mult, result_title, embed_color, img_file = -5, "🔸 정전 / 엄크", 0x2c3e50, "마크_엄크.png"
+        elif rand < 84.0: mult, result_title, embed_color, img_file = -1, "🔸 크리퍼 or 엔더맨", 0xe74c3c, "마크_크리퍼.png"
+        elif rand < 95.0: mult, result_title, embed_color, img_file = -2, "🔸 용암 or 사망", 0xe74c3c, "마크_용암.png"
+        else: mult, result_title, embed_color, img_file = -5, "🔸 정전 or 엄크", 0x2c3e50, "마크_엄크.png"
     elif 종류 == "롤":
         if rand < 0.02: mult, result_title, embed_color, img_file = 100, "🔹 챌린저", 0xf1c40f, "롤_챌린저.png"
         elif rand < 0.06: mult, result_title, embed_color, img_file = 50, "🔹 그랜드마스터", 0xf1c40f, "롤_그랜드마스터.png"
@@ -2115,12 +2130,12 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
         if rand < 0.02: mult, result_title, embed_color, img_file = 100, "🔹 레디언트", 0xf1c40f, "발로란트_레디언트.png"
         elif rand < 0.06: mult, result_title, embed_color, img_file = 50, "🔹 불멸", 0xf1c40f, "발로란트_불멸.png"
         elif rand < 0.40: mult, result_title, embed_color, img_file = 20, "🔹 초월자", 0x9b59b6, "발로란트_초월자.png"
-        elif rand < 4.00: mult, result_title, embed_color, img_file = 5, "🔹 다이아몬드", 0x3498db, "롤_다이아.png"
-        elif rand < 13.5: mult, result_title, embed_color, img_file = 2, "🔹 플래티넘", 0x2ecc71, "롤_플래티넘.png"
-        elif rand < 45.5: mult, result_title, embed_color, img_file = 1, "🔹 골드", 0x2ecc71, "롤_골드.png"
-        elif rand < 75.5: mult, result_title, embed_color, img_file = -1, "🔸 실버", 0xe74c3c, "롤_실버.png"
-        elif rand < 95.5: mult, result_title, embed_color, img_file = -2, "🔸 브론즈", 0xe74c3c, "롤_브론즈.png"
-        else: mult, result_title, embed_color, img_file = -5, "🔸 아이언", 0x2c3e50, "롤_아이언.png"
+        elif rand < 4.00: mult, result_title, embed_color, img_file = 5, "🔹 다이아몬드", 0x3498db, "발로란트_다이아.png"
+        elif rand < 13.5: mult, result_title, embed_color, img_file = 2, "🔹 플래티넘", 0x2ecc71, "발로란트_플래티넘.png"
+        elif rand < 45.5: mult, result_title, embed_color, img_file = 1, "🔹 골드", 0x2ecc71, "발로란트_골드.png"
+        elif rand < 75.5: mult, result_title, embed_color, img_file = -1, "🔸 실버", 0xe74c3c, "발로란트_실버.png"
+        elif rand < 95.5: mult, result_title, embed_color, img_file = -2, "🔸 브론즈", 0xe74c3c, "발로란트_브론즈.png"
+        else: mult, result_title, embed_color, img_file = -5, "🔸 아이언", 0x2c3e50, "발로란트_아이언.png"
     elif 종류 == "권루트":
         if rand < 0.01: mult, result_title, embed_color, img_file = 200, "🔹 L을 가져가~", 0xf1c40f, "권루트_L을가져가.png"
         elif rand < 0.04: mult, result_title, embed_color, img_file = 80, "🔹 측면 대 측면", 0xf1c40f, "권루트_측면대측면.png"
@@ -2133,16 +2148,17 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
         else: mult, result_title, embed_color, img_file = -10, "💥 포탈 오류 (전재산 파산)", 0x2c3e50, "권루트_포탈오류.png"
 
     if mult > 0:
-        payout = int(베팅금 * mult)
-        u["money"] += payout
-        net = payout - 베팅금
-        res_str = f"🎉 **+{net:,}원** 이득! (당첨금: {payout:,}원)" if net > 0 else ("⬛ **손익 없음**" if net == 0 else f"💥 **-{abs(net):,}원** 손실...")
+        profit = int(베팅금 * mult)
+        u["money"] += 베팅금 + profit
+        res_str = f"🎉 **+{profit:,}원** 이득! (총 수령: {(베팅금 + profit):,}원)"
     elif mult == 0:
-        res_str = f"💥 **-{베팅금:,}원** 손실..."
+        u["money"] += 베팅금
+        res_str = "⬛ **변동없음 (베팅금 환불)**"
     else:
-        extra_loss = int(베팅금 * (abs(mult) - 1))
+        loss = int(베팅금 * abs(mult))
+        extra_loss = loss - 베팅금
         u["money"] -= extra_loss
-        res_str = f"💥 **-{(베팅금 + extra_loss):,}원** 손실..."
+        res_str = f"💥 **-{loss:,}원** 손실..."
 
     save_data(data)
     res_embed = discord.Embed(title=f"🎰 {종류} 도박 결과", description=f"결과: **{result_title}**\n• {res_str}\n• 현재 잔액: **{u['money']:,}원**", color=embed_color)
