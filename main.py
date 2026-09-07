@@ -249,17 +249,18 @@ ROD_DATA = {
     4: {"name": "✨ 트라이아나", "price": 2000000, "fatigue": 15, "rates": (8.0, 46.0, 35.0, 7.0, 4.0)}
 }
 
+# 사진 스펙 적용 (4단계 1.0배 = 구매가 본전)
 BOMB_BOX_SPECS = {
-    1: {"val": 10000, "rate": 95},
-    2: {"val": 20000, "rate": 90},
-    3: {"val": 50000, "rate": 80},
-    4: {"val": 100000, "rate": 70},
-    5: {"val": 150000, "rate": 55},
-    6: {"val": 300000, "rate": 40},
-    7: {"val": 800000, "rate": 25},
-    8: {"val": 2000000, "rate": 15},
-    9: {"val": 7000000, "rate": 8},
-    10: {"val": 15000000, "rate": 0}
+    1: {"mult": 0.1, "rate": 95},
+    2: {"mult": 0.2, "rate": 90},
+    3: {"mult": 0.5, "rate": 80},
+    4: {"mult": 1.0, "rate": 70},
+    5: {"mult": 1.5, "rate": 55},
+    6: {"mult": 3.0, "rate": 40},
+    7: {"mult": 8.0, "rate": 25},
+    8: {"mult": 20.0, "rate": 15},
+    9: {"mult": 70.0, "rate": 8},
+    10: {"mult": 150.0, "rate": 0}
 }
 
 DUNGEON_DATA = {
@@ -475,24 +476,34 @@ class FishSellModal(discord.ui.Modal):
 # 7. UI 개편 컴포넌트 (/상점 /가방 /물고기가방 /스탯강화 /확률 /폭탄박스)
 # ---------------------------------------------------------
 
-# --- 신규 /폭탄박스 UI ---
+# --- 폭탄박스 게임 View (수정완료: 큰 이미지 및 가격별 배율 적용) ---
 class BombBoxGameView(discord.ui.View):
-    def __init__(self, user_id, current_stage):
+    def __init__(self, user_id, box_cost, stage=1):
         super().__init__(timeout=120)
         self.user_id = user_id
-        self.stage = current_stage
+        self.box_cost = box_cost
+        self.stage = stage
 
     def build_embed(self, user, last_msg=""):
         spec = BOMB_BOX_SPECS[self.stage]
-        embed = discord.Embed(title=f"💣 폭탄 박스 [{self.stage}단계]", color=0xe74c3c)
-        embed.set_thumbnail(url=get_img_url("도박_권루트.png"))
-        desc = (
-            f"• 현재 축적 상금: **{spec['val']:,}원**\n"
-            f"• 다음 단계 도약 성공률: 🔥 **{spec['rate']}%**\n\n"
-            f"더 두두려서 상금을 기하급수적으로 늘리시겠습니까, 아니면 여기서 안전하게 정산하시겠습니까?"
-        )
+        curr_val = int(self.box_cost * spec["mult"])
+
+        embed = discord.Embed(title=f"💣 시한폭탄 박스 [{self.stage}단계]", color=0xe74c3c)
+        embed.set_image(url=get_img_url(f"폭탄_{self.stage}단계.png"))
+
+        desc = f"• **현재 박스 가치:** **{curr_val:,}원** (구매가 대비 `{spec['mult']}배`)\n"
+        if self.stage < 10:
+            next_spec = BOMB_BOX_SPECS[self.stage + 1]
+            next_val = int(self.box_cost * next_spec["mult"])
+            desc += f"• **다음 단계 가치:** **{next_val:,}원** (`{next_spec['mult']}배`)\n"
+            desc += f"• **단계업 성공 확률:** 🔥 **{spec['rate']}%**\n\n"
+            desc += "더 두두려서 상금을 기하급수적으로 늘리시겠습니까, 아니면 여기서 정산하시겠습니까?"
+        else:
+            desc += "\n✨ **[10단계 최고 레벨 달성!]** 더 이상 두두릴 수 없습니다!"
+
         if last_msg:
             desc = f"{last_msg}\n\n" + desc
+
         embed.description = desc
         return embed
 
@@ -508,7 +519,7 @@ class BombBoxGameView(discord.ui.View):
         if rand < spec["rate"]:
             self.stage += 1
             if self.stage >= 10:
-                max_val = BOMB_BOX_SPECS[10]["val"]
+                max_val = int(self.box_cost * BOMB_BOX_SPECS[10]["mult"])
                 data = load_data()
                 u = get_user_data(data, interaction.user.id)
                 u["money"] += max_val
@@ -520,6 +531,7 @@ class BombBoxGameView(discord.ui.View):
                     description=f"🎉 대단합니다! 최종 10단계까지 두두리는데 성공하여 **+{max_val:,}원**을 획득했습니다!",
                     color=0xf1c40f
                 )
+                win_embed.set_image(url=get_img_url("폭탄_10단계.png"))
                 await interaction.response.edit_message(embed=win_embed, view=self)
             else:
                 embed = self.build_embed(interaction.user, f"✨ **성공!!** 폭탄이 터지지 않고 **[{self.stage}단계]**로 상승했습니다!")
@@ -531,6 +543,7 @@ class BombBoxGameView(discord.ui.View):
                 description="💣 폭탄이 터져버렸습니다... 그동안 축적된 상금을 모두 잃었습니다.",
                 color=0x2c3e50
             )
+            boom_embed.set_image(url=get_img_url(f"폭탄_{self.stage}단계.png"))
             await interaction.response.edit_message(embed=boom_embed, view=self)
 
     @discord.ui.button(label="💰 정산하고 그만두기", style=discord.ButtonStyle.success, row=0)
@@ -540,7 +553,7 @@ class BombBoxGameView(discord.ui.View):
             return
 
         spec = BOMB_BOX_SPECS[self.stage]
-        prize = spec["val"]
+        prize = int(self.box_cost * spec["mult"])
 
         data = load_data()
         u = get_user_data(data, interaction.user.id)
@@ -553,6 +566,7 @@ class BombBoxGameView(discord.ui.View):
             description=f"✅ **{self.stage}단계**에서 안전하게 정산하여 💰 **+{prize:,}원**을 획득했습니다!\n• 현재 잔액: **{u['money']:,}원**",
             color=0x2ecc71
         )
+        cashout_embed.set_image(url=get_img_url(f"폭탄_{self.stage}단계.png"))
         await interaction.response.edit_message(embed=cashout_embed, view=self)
 
 class BombBoxLobbyView(discord.ui.View):
@@ -560,7 +574,7 @@ class BombBoxLobbyView(discord.ui.View):
         super().__init__(timeout=120)
         self.user_id = user_id
 
-    async def start_game(self, interaction: discord.Interaction, cost: int, start_stage: int):
+    async def start_game(self, interaction: discord.Interaction, cost: int):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("❌ 본인만 클릭할 수 있습니다.", ephemeral=True)
             return
@@ -575,18 +589,18 @@ class BombBoxLobbyView(discord.ui.View):
         u["money"] -= cost
         save_data(data)
 
-        game_view = BombBoxGameView(self.user_id, start_stage)
+        game_view = BombBoxGameView(self.user_id, cost, stage=1)
         embed = game_view.build_embed(interaction.user)
         await interaction.response.edit_message(embed=embed, view=game_view)
 
-    @discord.ui.button(label="💣 1만 원 박스 (1단계)", style=discord.ButtonStyle.primary, row=0)
-    async def box1(self, interaction, button): await self.start_game(interaction, 10000, 1)
+    @discord.ui.button(label="💣 1만 원 박스", style=discord.ButtonStyle.primary, row=0)
+    async def box1(self, interaction, button): await self.start_game(interaction, 10000)
 
-    @discord.ui.button(label="💣 10만 원 박스 (4단계)", style=discord.ButtonStyle.success, row=0)
-    async def box2(self, interaction, button): await self.start_game(interaction, 100000, 4)
+    @discord.ui.button(label="💣 10만 원 박스", style=discord.ButtonStyle.success, row=0)
+    async def box2(self, interaction, button): await self.start_game(interaction, 100000)
 
-    @discord.ui.button(label="💣 100만 원 박스 (7단계)", style=discord.ButtonStyle.danger, row=0)
-    async def box3(self, interaction, button): await self.start_game(interaction, 1000000, 7)
+    @discord.ui.button(label="💣 100만 원 박스", style=discord.ButtonStyle.danger, row=0)
+    async def box3(self, interaction, button): await self.start_game(interaction, 1000000)
 
 # --- 신규 /스탯강화 UI ---
 class StatUpgradeView(discord.ui.View):
@@ -678,7 +692,7 @@ class ExpPotionSizeView(discord.ui.View):
     def __init__(self, user_id, pot_type):
         super().__init__(timeout=60)
         self.user_id = user_id
-        self.pot_type = pot_type  # "dance" or "fish"
+        self.pot_type = pot_type
 
     async def buy_exp(self, interaction: discord.Interaction, size: str, exp_amount: int, cost: int):
         if interaction.user.id != self.user_id:
@@ -876,7 +890,7 @@ class BagDynamicSelectView(discord.ui.View):
         await interaction.response.edit_message(embed=new_embed, view=new_view)
         await interaction.followup.send(msg, ephemeral=True)
 
-# --- /물고기가방 UI (변이 물고기 호환) ---
+# --- /물고기가방 UI ---
 def build_fish_bag_embed(user, u):
     data = load_data()
     fish_market = data["market"]["fish"]
@@ -980,7 +994,7 @@ class FishBagView(discord.ui.View):
         await interaction.response.edit_message(embed=new_embed, view=new_view)
         await interaction.followup.send(f"💰 물고기 전체 일괄 매도 완료! (+{total_earned:,}원)", ephemeral=True)
 
-# --- 개편된 /확률 (페이지 전환 UI) ---
+# --- 개편된 /확률 (3페이지: 폭탄박스 확률 추가) ---
 class OddsDashboardView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
@@ -994,7 +1008,7 @@ class OddsDashboardView(discord.ui.View):
             embed.add_field(name="⚔️ 리그 오브 레전드 (밸런스형)", value="• 챌린저 (0.02% | 100배)\n• 그랜드마스터 (0.04% | 50배)\n• 마스터 (0.34% | 20배)\n• 다이아 (2.60% | 5배)\n• 에메랄드 (5.00% | 3배)\n• 플래티넘 (9.50% | 2배)\n• 골드 (28.0% | 1배)\n• 패배/감점 (-1 ~ -5배)", inline=False)
             embed.add_field(name="🔫 발로란트 (고위험형)", value="• 레디언트 (0.02% | 100배)\n• 불멸 (0.04% | 50배)\n• 초월자 (0.34% | 20배)\n• 다이아 (3.60% | 5배)\n• 플래티넘 (9.50% | 2배)\n• 골드 (32.0% | 1배)\n• 패배/감점 (-1 ~ -5배)", inline=False)
             embed.add_field(name="🕺 권루트 (극단적 200배)", value="• L을 가져가~ (0.01% | 200배)\n• 측면 대 측면 (0.03% | 80배)\n• 셀카 (0.26% | 30배)\n• 팁 토 (2.70% | 10배)\n• 기분에 따라 (7.00% | 3배)\n• 라운드 앤 라운드 (20.0% | 1.5배)\n• 포탈 오류 (10.0% | 전재산 파산)", inline=False)
-        else:
+        elif self.page == 2:
             embed = discord.Embed(title="🎣 [2페이지] 낚싯대별 확률 및 변이 안내", color=0x2ecc71)
             for r_id, r_info in ROD_DATA.items():
                 trash, norm, rare, leg, box = r_info["rates"]
@@ -1004,23 +1018,41 @@ class OddsDashboardView(discord.ui.View):
                     inline=False
                 )
             embed.add_field(name="🌟 물고기 변이 확률 (일반 물고기 낚을 시 독립 적용)", value="• 🌀 **[혼돈]** (1.0% 확률 | 가치 3.0배)\n• 🐘 **[거대]** (1.5% 확률 | 가치 2.0배)", inline=False)
+        else:
+            embed = discord.Embed(title="💣 [3페이지] 박스 단계별 가치 및 확률 안내", color=0xe74c3c)
+            lines = [
+                "• **1단계**: 0.1배 (1천 / 1만 / 10만) | 확률: **95%**",
+                "• **2단계**: 0.2배 (2천 / 2만 / 20만) | 확률: **90%**",
+                "• **3단계**: 0.5배 (5천 / 5만 / 50만) | 확률: **80%**",
+                "• **4단계**: **1.0배 (1만 / 10만 / 100만) [본전]** | 확률: **70%**",
+                "• **5단계**: 1.5배 (1.5만 / 15만 / 150만) | 확률: **55%**",
+                "• **6단계**: 3.0배 (3만 / 30만 / 300만) | 확률: **40%**",
+                "• **7단계**: 8.0배 (8만 / 80만 / 800만) | 확률: **25%**",
+                "• **8단계**: 20.0배 (20만 / 200만 / 2000만) | 확률: **15%**",
+                "• **9단계**: 70.0배 (70만 / 700만 / 7000만) | 확률: **8%**",
+                "• **10단계**: **150.0배 (150만 / 1500만 / 1억5천만)** | MAX"
+            ]
+            embed.description = "\n".join(lines)
+            embed.set_footer(text="💡 1만 원 / 10만 원 / 100만 원 박스 공통 수치입니다.")
         return embed
 
-    @discord.ui.button(label="🎣 낚싯대별 확률 보기 ➡️", style=discord.ButtonStyle.primary)
-    async def toggle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="◀️ 이전", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("❌ 본인만 클릭할 수 있습니다.", ephemeral=True)
             return
 
-        if self.page == 1:
-            self.page = 2
-            button.label = "🎰 도박 확률 보기 ⬅️"
-            button.style = discord.ButtonStyle.success
-        else:
-            self.page = 1
-            button.label = "🎣 낚싯대별 확률 보기 ➡️"
-            button.style = discord.ButtonStyle.primary
+        self.page = 3 if self.page == 1 else self.page - 1
+        embed = self.build_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
 
+    @discord.ui.button(label="다음 ➡️", style=discord.ButtonStyle.primary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인만 클릭할 수 있습니다.", ephemeral=True)
+            return
+
+        self.page = 1 if self.page == 3 else self.page + 1
         embed = self.build_embed()
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -1724,7 +1756,7 @@ async def my_info(interaction: discord.Interaction):
     embed.description = desc
     await interaction.response.send_message(embed=embed)
 
-# 2) /스탯강화 (신규 명령어)
+# 2) /스탯강화
 @bot.tree.command(name="스탯강화", description="체력(최대 피로도)과 근성(노코스트 확률) 스탯을 강화합니다.")
 async def stat_upgrade(interaction: discord.Interaction):
     data = load_data()
@@ -1733,7 +1765,7 @@ async def stat_upgrade(interaction: discord.Interaction):
     embed = view.build_embed(interaction.user, u)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# 3) /가방 (비공개 ephemeral=True)
+# 3) /가방
 @bot.tree.command(name="가방", description="소지품 확인 및 보유 중인 소모품/장비를 사용합니다.")
 async def bag(interaction: discord.Interaction):
     data = load_data()
@@ -1742,7 +1774,7 @@ async def bag(interaction: discord.Interaction):
     view = BagDynamicSelectView(interaction.user.id, u)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# 4) /물고기가방 (신규 독립 명령어)
+# 4) /물고기가방
 @bot.tree.command(name="물고기가방", description="소지한 물고기 현황을 확인하고 개별 또는 전체 매도합니다.")
 async def fish_bag(interaction: discord.Interaction):
     data = load_data()
@@ -1751,7 +1783,7 @@ async def fish_bag(interaction: discord.Interaction):
     view = FishBagView(interaction.user.id, u)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# 5) /상점 (경험치 영양제 연동)
+# 5) /상점
 @bot.tree.command(name="상점", description="회복제, 경험치 영양제, 강화재료 및 낚싯대를 구매합니다.")
 async def shop(interaction: discord.Interaction):
     data = load_data()
@@ -1769,8 +1801,8 @@ async def shop(interaction: discord.Interaction):
     view = ShopSelectView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 6) /확률 (개편된 페이지 전환)
-@bot.tree.command(name="확률", description="도박 당첨 확률 및 낚싯대별 잡이 확률을 확인합니다.")
+# 6) /확률 (폭탄박스 페이지 포함)
+@bot.tree.command(name="확률", description="도박 당첨 확률, 낚싯대 잡이 확률 및 폭탄박스 확률을 확인합니다.")
 async def odds_dashboard(interaction: discord.Interaction):
     view = OddsDashboardView(interaction.user.id)
     embed = view.build_embed()
@@ -1790,14 +1822,21 @@ async def artifact_dashboard(interaction: discord.Interaction):
     view = ArtifactView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 9) /폭탄박스 (오류 수정 완료)
+# 9) /폭탄박스 (수정 완료)
 @bot.tree.command(name="폭탄박스", description="단계별로 폭탄을 두두려 대박 상금을 획득하는 두두리기 게임!")
 async def bomb_box(interaction: discord.Interaction):
     embed = discord.Embed(
         title="💣 시한폭탄 박스 로비",
-        description="아래 버튼을 눌러 구매할 폭탄 박스 종류를 선택하세요!\n\n• **1만 원 박스 (1단계부터)**\n• **10만 원 박스 (4단계부터)**\n• **100만 원 박스 (7단계부터)**\n\n두두릴 때마다 폭탄 가치가 급상승하지만, 폭발하면 참가비가 날아갑니다!",
+        description=(
+            "아래 버튼을 눌러 구매할 폭탄 박스 종류를 선택하세요!\n\n"
+            "• **1만 원 박스** (1단계 시작 | 목표 150만 원)\n"
+            "• **10만 원 박스** (1단계 시작 | 목표 1,500만 원)\n"
+            "• **100만 원 박스** (1단계 시작 | 목표 1억 5천만 원)\n\n"
+            "두두릴 때마다 폭탄 가치가 급상승하지만, 폭발하면 참가비가 날아갑니다!"
+        ),
         color=0xe74c3c
     )
+    embed.set_image(url=get_img_url("폭탄_1단계.png"))
     view = BombBoxLobbyView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
@@ -1909,7 +1948,7 @@ async def transfer(interaction: discord.Interaction, 받으실분: discord.Membe
     embed.description = f"• **{interaction.user.mention}** ➔ **{받으실분.mention}**\n• 송금액: {금액:,}원 | 실수령액: **{actual_amount:,}원**"
     await interaction.response.send_message(embed=embed)
 
-# 13) /춤추기 (근성 패시브 연동)
+# 13) /춤추기
 @bot.tree.command(name="춤추기", description="춤을 춰서 돈, 유물, 강화석을 얻습니다.")
 async def dance(interaction: discord.Interaction):
     data = load_data()
@@ -1925,7 +1964,6 @@ async def dance(interaction: discord.Interaction):
         await interaction.response.send_message(f"⏳ 지쳤습니다! {remain}초 후 다시 가능합니다.", ephemeral=True)
         return
 
-    # 근성 패시브 체크
     t_lvl = u.get("stat_tenacity_level", 0)
     t_rate = TENACITY_STAT_SPECS.get(t_lvl, {}).get("rate", 0.0)
     tenacity_triggered = (random.uniform(0, 100) < t_rate)
@@ -1971,7 +2009,7 @@ async def dance(interaction: discord.Interaction):
     embed.set_footer(text=f"⚡ 남은 피로도: {u['fatigue']}/{max_f}")
     await interaction.response.send_message(embed=embed)
 
-# 14) /낚시 (근성 패시브 연동)
+# 14) /낚시
 @bot.tree.command(name="낚시", description="찌를 물에 던져 물고기나 보물상자를 낚습니다.")
 async def fishing(interaction: discord.Interaction):
     data = load_data()
@@ -1995,7 +2033,6 @@ async def fishing(interaction: discord.Interaction):
 
     fatigue_cost = max(1, rod_info["fatigue"] - fatigue_reduction)
 
-    # 근성 패시브 체크
     t_lvl = u.get("stat_tenacity_level", 0)
     t_rate = TENACITY_STAT_SPECS.get(t_lvl, {}).get("rate", 0.0)
     tenacity_triggered = (random.uniform(0, 100) < t_rate)
@@ -2112,7 +2149,7 @@ async def gamble(interaction: discord.Interaction, 종류: str, 베팅금: int):
     res_embed.set_thumbnail(url=get_img_url(img_file))
     await msg.edit(embed=res_embed)
 
-# 16) /가위바위보 (복구된 1v1 배틀)
+# 16) /가위바위보
 @bot.tree.command(name="가위바위보", description="다른 유저와 돈을 걸고 1v1 심리전 가위바위보 대결을 펼칩니다.")
 async def rps_duel(interaction: discord.Interaction, 베팅금: int):
     if 베팅금 < 1000:
