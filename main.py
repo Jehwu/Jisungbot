@@ -472,8 +472,121 @@ class FishSellModal(discord.ui.Modal):
         await interaction.followup.send(f"✅ **[{self.fish_item_key}]** {qty}마리 판매 완료! (+{total:,}원)", ephemeral=True)
 
 # ---------------------------------------------------------
-# 7. UI 개편 컴포넌트 (/상점 /가방 /물고기가방 /스탯강화 /확률)
+# 7. UI 개편 컴포넌트 (/상점 /가방 /물고기가방 /스탯강화 /확률 /폭탄박스)
 # ---------------------------------------------------------
+
+# --- 신규 /폭탄박스 UI ---
+class BombBoxGameView(discord.ui.View):
+    def __init__(self, user_id, current_stage):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.stage = current_stage
+
+    def build_embed(self, user, last_msg=""):
+        spec = BOMB_BOX_SPECS[self.stage]
+        embed = discord.Embed(title=f"💣 폭탄 박스 [{self.stage}단계]", color=0xe74c3c)
+        embed.set_thumbnail(url=get_img_url("도박_권루트.png"))
+        desc = (
+            f"• 현재 축적 상금: **{spec['val']:,}원**\n"
+            f"• 다음 단계 도약 성공률: 🔥 **{spec['rate']}%**\n\n"
+            f"더 두두려서 상금을 기하급수적으로 늘리시겠습니까, 아니면 여기서 안전하게 정산하시겠습니까?"
+        )
+        if last_msg:
+            desc = f"{last_msg}\n\n" + desc
+        embed.description = desc
+        return embed
+
+    @discord.ui.button(label="🔨 두두리기!", style=discord.ButtonStyle.danger, row=0)
+    async def tap_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인 게임만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        spec = BOMB_BOX_SPECS[self.stage]
+        rand = random.uniform(0, 100)
+
+        if rand < spec["rate"]:
+            self.stage += 1
+            if self.stage >= 10:
+                max_val = BOMB_BOX_SPECS[10]["val"]
+                data = load_data()
+                u = get_user_data(data, interaction.user.id)
+                u["money"] += max_val
+                save_data(data)
+
+                for child in self.children: child.disabled = True
+                win_embed = discord.Embed(
+                    title="🏆 [MAX 잭팟!] 폭탄 박스 정점 달성!",
+                    description=f"🎉 대단합니다! 최종 10단계까지 두두리는데 성공하여 **+{max_val:,}원**을 획득했습니다!",
+                    color=0xf1c40f
+                )
+                await interaction.response.edit_message(embed=win_embed, view=self)
+            else:
+                embed = self.build_embed(interaction.user, f"✨ **성공!!** 폭탄이 터지지 않고 **[{self.stage}단계]**로 상승했습니다!")
+                await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            for child in self.children: child.disabled = True
+            boom_embed = discord.Embed(
+                title="💥 콰아아앙!! 폭발했습니다!!",
+                description="💣 폭탄이 터져버렸습니다... 그동안 축적된 상금을 모두 잃었습니다.",
+                color=0x2c3e50
+            )
+            await interaction.response.edit_message(embed=boom_embed, view=self)
+
+    @discord.ui.button(label="💰 정산하고 그만두기", style=discord.ButtonStyle.success, row=0)
+    async def cashout_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인 게임만 조작할 수 있습니다.", ephemeral=True)
+            return
+
+        spec = BOMB_BOX_SPECS[self.stage]
+        prize = spec["val"]
+
+        data = load_data()
+        u = get_user_data(data, interaction.user.id)
+        u["money"] += prize
+        save_data(data)
+
+        for child in self.children: child.disabled = True
+        cashout_embed = discord.Embed(
+            title="💰 현금 정산 완료!",
+            description=f"✅ **{self.stage}단계**에서 안전하게 정산하여 💰 **+{prize:,}원**을 획득했습니다!\n• 현재 잔액: **{u['money']:,}원**",
+            color=0x2ecc71
+        )
+        await interaction.response.edit_message(embed=cashout_embed, view=self)
+
+class BombBoxLobbyView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+
+    async def start_game(self, interaction: discord.Interaction, cost: int, start_stage: int):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인만 클릭할 수 있습니다.", ephemeral=True)
+            return
+
+        data = load_data()
+        u = get_user_data(data, interaction.user.id)
+
+        if u["money"] < cost:
+            await interaction.response.send_message(f"❌ 현금이 부족합니다! ({cost:,}원 필요)", ephemeral=True)
+            return
+
+        u["money"] -= cost
+        save_data(data)
+
+        game_view = BombBoxGameView(self.user_id, start_stage)
+        embed = game_view.build_embed(interaction.user)
+        await interaction.response.edit_message(embed=embed, view=game_view)
+
+    @discord.ui.button(label="💣 1만 원 박스 (1단계)", style=discord.ButtonStyle.primary, row=0)
+    async def box1(self, interaction, button): await self.start_game(interaction, 10000, 1)
+
+    @discord.ui.button(label="💣 10만 원 박스 (4단계)", style=discord.ButtonStyle.success, row=0)
+    async def box2(self, interaction, button): await self.start_game(interaction, 100000, 4)
+
+    @discord.ui.button(label="💣 100만 원 박스 (7단계)", style=discord.ButtonStyle.danger, row=0)
+    async def box3(self, interaction, button): await self.start_game(interaction, 1000000, 7)
 
 # --- 신규 /스탯강화 UI ---
 class StatUpgradeView(discord.ui.View):
@@ -1677,15 +1790,14 @@ async def artifact_dashboard(interaction: discord.Interaction):
     view = ArtifactView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 9) /폭탄박스
+# 9) /폭탄박스 (오류 수정 완료)
 @bot.tree.command(name="폭탄박스", description="단계별로 폭탄을 두두려 대박 상금을 획득하는 두두리기 게임!")
 async def bomb_box(interaction: discord.Interaction):
     embed = discord.Embed(
         title="💣 시한폭탄 박스 로비",
-        description="아래 버튼을 눌러 구매할 폭탄 박스 종류를 선택하세요!\n\n• **1만 원 박스** | • **10만 원 박스** | • **100만 원 박스**\n\n두두릴 때마다 폭탄 가치가 급상승하지만, 폭발하면 참가비가 날아갑니다!",
+        description="아래 버튼을 눌러 구매할 폭탄 박스 종류를 선택하세요!\n\n• **1만 원 박스 (1단계부터)**\n• **10만 원 박스 (4단계부터)**\n• **100만 원 박스 (7단계부터)**\n\n두두릴 때마다 폭탄 가치가 급상승하지만, 폭발하면 참가비가 날아갑니다!",
         color=0xe74c3c
     )
-    from __main__ import BombBoxLobbyView
     view = BombBoxLobbyView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
