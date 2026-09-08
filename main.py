@@ -490,7 +490,7 @@ class FishSellModal(discord.ui.Modal):
 # 7. UI 컴포넌트 (/똥싸기, /상점, /가방, /물고기가방, /스탯강화, /확률, /폭탄박스)
 # ---------------------------------------------------------
 
-# --- 개편된 /똥싸기 게임 & 로비 View ---
+# --- /똥싸기 게임 & 로비 View ---
 class PoopGameView(discord.ui.View):
     def __init__(self, user_id, poop_level):
         super().__init__(timeout=60)
@@ -498,67 +498,27 @@ class PoopGameView(discord.ui.View):
         self.poop_level = poop_level
         self.step = 1
         self.scores = []
-        self.pos = 0
-        self.direction = 1
-        self.message = None
-        self.anim_task = None
-        self.is_finished = False
-
-    def stop_anim(self):
-        if self.anim_task and not self.anim_task.done():
-            self.anim_task.cancel()
-
-    def render_bar(self):
-        slots = ["💔", "💛", "💚", "🎯", "💚", "💛", "💔"]
-        rendered = []
-        for i, symbol in enumerate(slots):
-            if i == self.pos:
-                rendered.append(f"【{symbol}】")
-            else:
-                rendered.append(symbol)
-        return " ".join(rendered)
+        self.history = []
 
     def get_gauge_embed(self):
-        speed_str = ["0.6초 (보통)", "0.4초 (가속)", "0.25초 (초고속!)"][self.step - 1]
+        speed_str = ["0.30초 (기본)", "0.20초 (가속)", "0.12초 (초고속!)"][self.step - 1]
+        
+        desc = (
+            f"• **현재 속도:** `{speed_str}` (내부 타이밍 게이지가 작동 중!)\n"
+            "• 타이밍에 맞춰 **[💩 쾌감 멈추기!]** 버튼을 누르세요!\n\n"
+            "**[ 게이지 목표 판정 ]**\n"
+            "`💔치질 | 💛일반 | 💚쾌변 | 🎯황금 | 💚쾌변 | 💛일반 | 💔치질`\n"
+        )
+        
+        if self.history:
+            desc += "\n**[ 이전 회차 멈춤 결과 ]**\n" + "\n".join(self.history)
+
         embed = discord.Embed(
-            title=f"🚽 [{self.step}/3회차] 타이밍에 맞춰 힘주기!",
-            description=(
-                f"• **현재 속도:** `{speed_str}`\n"
-                "• 커서`【 】`가 **【🎯】**에 위치했을 때 아래 버튼을 누르세요!\n\n"
-                f"### {self.render_bar()}\n"
-            ),
+            title=f"🚽 [{self.step}/3회차] 타이밍 힘주기 진행 중!",
+            description=desc,
             color=0x9b59b6
         )
         return embed
-
-    async def start_animation(self):
-        self.stop_anim()
-        self.anim_task = asyncio.create_task(self._animate_loop())
-
-    async def _animate_loop(self):
-        intervals = [0.6, 0.4, 0.25]
-        try:
-            while not self.is_finished:
-                await asyncio.sleep(intervals[self.step - 1])
-                self.pos += self.direction
-                if self.pos >= 6:
-                    self.pos = 6
-                    self.direction = -1
-                elif self.pos <= 0:
-                    self.pos = 0
-                    self.direction = 1
-
-                if self.message and not self.is_finished:
-                    try:
-                        await self.message.edit(embed=self.get_gauge_embed(), view=self)
-                    except Exception:
-                        pass
-        except asyncio.CancelledError:
-            pass
-
-    async def on_timeout(self):
-        self.is_finished = True
-        self.stop_anim()
 
     @discord.ui.button(label="💩 쾌감 멈추기!", style=discord.ButtonStyle.danger)
     async def tap_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -566,19 +526,30 @@ class PoopGameView(discord.ui.View):
             await interaction.response.send_message("❌ 본인 게임입니다.", ephemeral=True)
             return
 
-        if self.is_finished:
-            return
+        now_ms = int(datetime.now().timestamp() * 1000)
+        cycle = [300, 200, 120][self.step - 1]
+        mod = now_ms % cycle
 
-        pos_score_map = {3: 3, 2: 2, 4: 2, 1: 1, 5: 1, 0: -2, 6: -2}
-        score = pos_score_map.get(self.pos, 0)
+        if mod < (cycle * 0.12):
+            score = 3
+            visual = "`💔 | 💛 | 💚 | 【🎯 황금존!】 | 💚 | 💛 | 💔` (+3점)"
+        elif mod < (cycle * 0.38):
+            score = 2
+            visual = "`💔 | 💛 | 【💚 쾌변존!】 | 🎯 | 💚 | 💛 | 💔` (+2점)"
+        elif mod < (cycle * 0.72):
+            score = 1
+            visual = "`💔 | 【💛 일반존!】 | 💚 | 🎯 | 💚 | 💛 | 💔` (+1점)"
+        else:
+            score = -2
+            visual = "`【💔 치질존!】 | 💛 | 💚 | 🎯 | 💚 | 💛 | 💔` (-2점)"
+
         self.scores.append(score)
+        self.history.append(f"• {self.step}회차 정지: {visual}")
 
         if self.step < 3:
             self.step += 1
             await interaction.response.edit_message(embed=self.get_gauge_embed(), view=self)
         else:
-            self.is_finished = True
-            self.stop_anim()
             for child in self.children:
                 child.disabled = True
 
@@ -634,9 +605,11 @@ class PoopGameView(discord.ui.View):
             u["money"] += final_money
             save_data(data)
 
+            history_str = "\n".join(self.history)
             res_embed = discord.Embed(
                 title=f"🚽 똥싸기 최종 결과 - {res_title}",
                 description=(
+                    f"**[ 회차별 멈춤 위치 ]**\n{history_str}\n\n"
                     f"{score_str}\n"
                     f"• **레벨 보상 배율:** `x{mult:.2f}`\n"
                     f"• **피로도 변화:** `{final_fatigue:+d}` (현재: {u['fatigue']}/{max_f})\n"
@@ -707,8 +680,6 @@ class PoopLobbyView(discord.ui.View):
 
         game_view = PoopGameView(self.user_id, u.get("poop_level", 1))
         await interaction.response.edit_message(embed=game_view.get_gauge_embed(), view=game_view)
-        game_view.message = await interaction.original_response()
-        await game_view.start_animation()
 
     @discord.ui.button(label="⬆️ 똥싸기 레벨업", style=discord.ButtonStyle.primary, row=0)
     async def upgrade_poop(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1262,7 +1233,7 @@ class FishBagView(discord.ui.View):
         await interaction.response.edit_message(embed=new_embed, view=new_view)
         await interaction.followup.send(f"💰 물고기 전체 일괄 매도 완료! (+{total_earned:,}원)", ephemeral=True)
 
-# --- 개편된 /확률 (4페이지: 춤추기 확률 신설) ---
+# --- 개편된 /확률 (4페이지) ---
 class OddsDashboardView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
@@ -2107,7 +2078,7 @@ async def shop(interaction: discord.Interaction):
     view = ShopSelectView(interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# 7) /확률 (4페이지)
+# 7) /확률
 @bot.tree.command(name="확률", description="도박 당첨 확률, 춤추기 확률, 낚싯대 잡이 확률 및 폭탄박스 확률을 확인합니다.")
 async def odds_dashboard(interaction: discord.Interaction):
     view = OddsDashboardView(interaction.user.id)
